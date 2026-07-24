@@ -20,6 +20,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [signedIn, setSignedIn] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
+  const [folderId, setFolderId] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [tree, setTree] = useState<unknown>(null);
 
@@ -79,7 +80,66 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) return appendLog(`Create folder failed (${res.status}): ${JSON.stringify(data)}`);
+    setFolderId(data.id);
     appendLog(`Created folder ${data.id}`);
+  };
+
+  const moveNoteToFolder = async (): Promise<void> => {
+    if (!note || !folderId) return;
+    const res = await fetch(`/api/notes/${note.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: note.version, folderId }),
+    });
+    const data = await res.json();
+    if (!res.ok) return appendLog(`Move note failed (${res.status}): ${JSON.stringify(data)}`);
+    setNote(data);
+    appendLog(`Moved note into folder ${folderId}, now version ${data.version}`);
+  };
+
+  const deleteNote = async (): Promise<void> => {
+    if (!note) return;
+    const res = await fetch(`/api/notes/${note.id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) return appendLog(`Delete note failed (${res.status}): ${JSON.stringify(data)}`);
+    appendLog(`Deleted note ${note.id}`);
+    setNote(null);
+  };
+
+  const renameFolder = async (): Promise<void> => {
+    if (!folderId) return;
+    const res = await fetch(`/api/folders/${folderId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `Renamed Folder ${Date.now()}` }),
+    });
+    const data = await res.json();
+    if (!res.ok) return appendLog(`Rename folder failed (${res.status}): ${JSON.stringify(data)}`);
+    appendLog(`Renamed folder -> "${data.name}"`);
+  };
+
+  // A folder can't become its own parent — this should always come back
+  // as a 400 from the cycle guard, never silently succeed.
+  const tryInvalidMove = async (): Promise<void> => {
+    if (!folderId) return;
+    const res = await fetch(`/api/folders/${folderId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parentId: folderId }),
+    });
+    const data = await res.json();
+    appendLog(`Self-parent test -> HTTP ${res.status}: ${JSON.stringify(data)}`);
+  };
+
+  // Deletes the folder (and, via cascade, anything still inside it —
+  // exercise "move note to folder" first if you want to see that part).
+  const deleteFolder = async (): Promise<void> => {
+    if (!folderId) return;
+    const res = await fetch(`/api/folders/${folderId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) return appendLog(`Delete folder failed (${res.status}): ${JSON.stringify(data)}`);
+    appendLog(`Deleted folder ${folderId}`);
+    setFolderId(null);
   };
 
   const loadTree = async (): Promise<void> => {
@@ -124,8 +184,27 @@ export default function Home() {
           <button className="border rounded px-3 py-2" disabled={!note} onClick={() => void forceConflict()}>
             Force conflict (expect 409)
           </button>
+          <button className="border rounded px-3 py-2" disabled={!note} onClick={() => void deleteNote()}>
+            Delete note
+          </button>
           <button className="border rounded px-3 py-2" onClick={() => void createFolder()}>
             Create folder
+          </button>
+          <button
+            className="border rounded px-3 py-2"
+            disabled={!note || !folderId}
+            onClick={() => void moveNoteToFolder()}
+          >
+            Move note to folder
+          </button>
+          <button className="border rounded px-3 py-2" disabled={!folderId} onClick={() => void renameFolder()}>
+            Rename folder
+          </button>
+          <button className="border rounded px-3 py-2" disabled={!folderId} onClick={() => void tryInvalidMove()}>
+            Try self-parent (expect 400)
+          </button>
+          <button className="border rounded px-3 py-2" disabled={!folderId} onClick={() => void deleteFolder()}>
+            Delete folder
           </button>
           <button className="border rounded px-3 py-2" onClick={() => void loadTree()}>
             Load tree

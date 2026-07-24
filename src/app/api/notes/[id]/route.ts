@@ -27,7 +27,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const { version, name, frontmatter, body } = await request.json();
+  const { version, name, frontmatter, body, folderId } = await request.json();
   if (typeof version !== "number") {
     return NextResponse.json({ error: "version is required" }, { status: 400 });
   }
@@ -36,6 +36,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (name !== undefined) patch.name = name;
   if (frontmatter !== undefined) patch.frontmatter = frontmatter;
   if (body !== undefined) patch.body = body;
+  if (folderId !== undefined) patch.folder_id = folderId;
 
   const { data: updated, error } = await supabase
     .from("notes")
@@ -57,4 +58,19 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   return NextResponse.json(updated);
+}
+
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const { data: deleted, error } = await supabase.from("notes").delete().eq("id", id).select().maybeSingle();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json({ deleted: true });
 }
