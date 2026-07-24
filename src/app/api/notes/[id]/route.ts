@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthedClient } from "@/lib/supabase/apiAuth";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase } = authed;
 
   const { data: note, error } = await supabase.from("notes").select("*").eq("id", id).single();
   if (error || !note) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -21,18 +19,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 // failure mode the old file-based "-conflict-" copies came from).
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase, userId } = authed;
 
   const { version, name, frontmatter, body, folderId } = await request.json();
   if (typeof version !== "number") {
     return NextResponse.json({ error: "version is required" }, { status: 400 });
   }
 
-  const patch: Record<string, unknown> = { version: version + 1, updated_by: user.id };
+  const patch: Record<string, unknown> = { version: version + 1, updated_by: userId };
   if (name !== undefined) patch.name = name;
   if (frontmatter !== undefined) patch.frontmatter = frontmatter;
   if (body !== undefined) patch.body = body;
@@ -60,13 +56,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   return NextResponse.json(updated);
 }
 
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase } = authed;
 
   const { data: deleted, error } = await supabase.from("notes").delete().eq("id", id).select().maybeSingle();
 

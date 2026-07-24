@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthedClient } from "@/lib/supabase/apiAuth";
 
 // Shape mirrors the desktop app's TreeEntry (see Project Vault's
 // src/renderer/src/components/file-tree/FileTree.tsx): isDirectory +
@@ -14,17 +14,15 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+export async function GET(request: Request) {
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase, userId } = authed;
 
   const { data: workspace, error: workspaceError } = await supabase
     .from("workspaces")
     .select("id")
-    .eq("owner_id", user.id)
+    .eq("owner_id", userId)
     .single();
   if (workspaceError || !workspace) {
     return NextResponse.json({ error: "No workspace found for this user" }, { status: 404 });

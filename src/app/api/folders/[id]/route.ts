@@ -1,23 +1,18 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-
-type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getAuthedClient } from "@/lib/supabase/apiAuth";
 
 // Walks up from the proposed new parent toward the root. If it reaches
 // `folderId` along the way, the move would either put a folder inside
 // itself or inside one of its own descendants — a cycle that fs.rename
 // would reject naturally on a real filesystem, but a bare UPDATE here
 // would just silently create, breaking /api/tree's recursion forever.
-async function getParentId(supabase: SupabaseServerClient, id: string): Promise<string | null | undefined> {
+async function getParentId(supabase: SupabaseClient, id: string): Promise<string | null | undefined> {
   const { data } = await supabase.from("folders").select("parent_id").eq("id", id).maybeSingle();
   return data?.parent_id;
 }
 
-async function wouldCreateCycle(
-  supabase: SupabaseServerClient,
-  folderId: string,
-  newParentId: string | null
-): Promise<boolean> {
+async function wouldCreateCycle(supabase: SupabaseClient, folderId: string, newParentId: string | null): Promise<boolean> {
   if (newParentId === null) return false;
   if (newParentId === folderId) return true;
 
@@ -33,11 +28,9 @@ async function wouldCreateCycle(
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase } = authed;
 
   const { name, parentId } = await request.json();
   const patch: Record<string, unknown> = {};
@@ -59,13 +52,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   return NextResponse.json(folder);
 }
 
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase } = authed;
 
   // Descendant folders and notes cascade via the "on delete cascade" FK
   // constraints in 0001_init_schema.sql — same effect as recursively

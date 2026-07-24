@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthedClient } from "@/lib/supabase/apiAuth";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase, userId } = authed;
 
   const { name, folderId = null, frontmatter = {}, body = "" } = await request.json();
   if (!name || typeof name !== "string") {
@@ -18,7 +16,7 @@ export async function POST(request: Request) {
   const { data: workspace, error: workspaceError } = await supabase
     .from("workspaces")
     .select("id")
-    .eq("owner_id", user.id)
+    .eq("owner_id", userId)
     .single();
   if (workspaceError || !workspace) {
     return NextResponse.json({ error: "No workspace found for this user" }, { status: 404 });
@@ -32,8 +30,8 @@ export async function POST(request: Request) {
       name,
       frontmatter,
       body,
-      created_by: user.id,
-      updated_by: user.id,
+      created_by: userId,
+      updated_by: userId,
     })
     .select()
     .single();
