@@ -1,5 +1,36 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
+import { getWorkspaceId } from "@/lib/workspace";
+
+// Title-only search, scoped to the caller's workspace — mirrors the local
+// app's searchTitles (used for wiki-link autocomplete), not a full-text
+// search over note bodies. See /api/search for that.
+export async function GET(request: Request) {
+  const authed = await getAuthedClient(request);
+  if (!authed) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const { supabase, userId } = authed;
+
+  const { searchParams } = new URL(request.url);
+  const q = searchParams.get("q")?.trim() ?? "";
+  const type = searchParams.get("type") ?? undefined;
+  if (!q) return NextResponse.json([]);
+
+  const workspaceId = await getWorkspaceId(supabase, userId);
+  if (!workspaceId) return NextResponse.json({ error: "No workspace found for this user" }, { status: 404 });
+
+  let query = supabase
+    .from("notes")
+    .select("id, name")
+    .eq("workspace_id", workspaceId)
+    .ilike("name", `%${q}%`)
+    .order("name")
+    .limit(20);
+  if (type) query = query.eq("note_type", type);
+
+  const { data: notes, error } = await query;
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  return NextResponse.json(notes);
+}
 
 export async function POST(request: Request) {
   const authed = await getAuthedClient(request);
