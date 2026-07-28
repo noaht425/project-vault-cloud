@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseWorldDateStart, compareWorldDates } from "../src/lib/worldDate";
+import { parseWorldDateStart, compareWorldDates, parseWorldDateRaw } from "../src/lib/worldDate";
 
 describe("parseWorldDateStart", () => {
   it("returns null for unparseable text", () => {
@@ -72,5 +72,24 @@ describe("compareWorldDates", () => {
     // Both resolve to the same day-1-precision epoch as "1 Aucaela, 10 AM".
     const dates = ["5 Blorptown, 10 AM", "10 AM"];
     expect([...dates].sort(compareWorldDates)).toEqual(["10 AM", "5 Blorptown, 10 AM"]);
+  });
+});
+
+describe("parseWorldDateRaw", () => {
+  it("returns the raw month name/day, unscaled", () => {
+    expect(parseWorldDateRaw("15 Aucaela, 42 AM")).toEqual({ monthName: "Aucaela", day: 15, year: 42, era: "AM" });
+  });
+
+  it("has no month name for a bare year", () => {
+    expect(parseWorldDateRaw("50 AF")).toEqual({ monthName: null, day: null, year: 50, era: "AF" });
+  });
+
+  it("still surfaces an unrecognized month name as-is", () => {
+    expect(parseWorldDateRaw("5 Blorptown, 10 AM")).toEqual({ monthName: "Blorptown", day: 5, year: 10, era: "AM" });
+  });
+
+  it("returns null for unparseable text", () => {
+    expect(parseWorldDateRaw("unparseable")).toBeNull();
+    expect(parseWorldDateRaw("")).toBeNull();
   });
 });

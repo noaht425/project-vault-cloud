@@ -124,3 +124,54 @@ export function compareWorldDates(a: string, b: string): number {
   if (eb !== null) return 1;
   return a.localeCompare(b);
 }
+
+// Ported from the Electron app's src/common/worldDate.ts (same file this
+// whole module is ported from) — added for the calendar/timeline system's
+// migration (build step 5, see the Electron repo's
+// docs/plans/2026-07-28-calendar-timeline-system.md for the full plan,
+// which this repo doesn't keep its own copy of). Same parsing as
+// parseWorldDateStart, but returns the raw month name/day instead of a
+// scaled/sorted epoch number, since the migration needs to look an actual
+// month up by name in a user-defined calendar note rather than sort
+// against this file's own hardcoded MAIN_MONTHS/KROTAPHOS_MONTHS.
+export interface WorldDateRawComponents {
+  monthName: string | null;
+  day: number | null;
+  year: number;
+  era: "AM" | "AF";
+}
+
+export function parseWorldDateRaw(text: string): WorldDateRawComponents | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const rangeParts = trimmed.split(RANGE_SPLIT_RE);
+  const candidate = rangeParts.length > 1 ? rangeParts[0] : trimmed;
+
+  const full = candidate.match(FULL_DATE_RE);
+  if (full) {
+    return {
+      monthName: full[2],
+      day: Number(full[1]),
+      year: Number(full[3].replace(/,/g, "")),
+      era: (full[4]?.toUpperCase() as "AM" | "AF" | undefined) ?? "AM",
+    };
+  }
+
+  const compact = candidate.match(COMPACT_RANGE_RE);
+  if (compact) {
+    return { monthName: null, day: null, year: Number(compact[1].replace(/,/g, "")), era: compact[3].toUpperCase() as "AM" | "AF" };
+  }
+
+  const bare = candidate.match(BARE_YEAR_RE);
+  if (bare) {
+    return {
+      monthName: null,
+      day: null,
+      year: Number(bare[1].replace(/,/g, "")),
+      era: (bare[2]?.toUpperCase() as "AM" | "AF" | undefined) ?? "AM",
+    };
+  }
+
+  return null;
+}
