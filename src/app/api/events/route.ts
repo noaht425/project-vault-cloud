@@ -18,6 +18,7 @@ interface EventSummary {
   date: string;
   summary: string;
   noteType: string;
+  structuredDate?: unknown;
 }
 
 // The whole workspace's history, not just note_type='event' notes — every
@@ -51,6 +52,7 @@ export async function GET(request: Request) {
         date: typeof note.frontmatter.date === "string" ? note.frontmatter.date : "",
         summary: typeof note.frontmatter.summary === "string" ? note.frontmatter.summary : "",
         noteType: "event",
+        structuredDate: note.frontmatter.structuredDate ?? null,
       });
     }
 
