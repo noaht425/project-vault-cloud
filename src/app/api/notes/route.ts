@@ -13,7 +13,17 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim() ?? "";
   const type = searchParams.get("type") ?? undefined;
-  if (!q) return NextResponse.json([]);
+  // An empty query with NO type filter is a genuinely-empty autocomplete
+  // box — short-circuiting to [] avoids an unfiltered near-global list for
+  // that case. But an empty query WITH a type filter (e.g. "every
+  // calendar note", used by EventSheet's calendar picker and the pill
+  // timeline view to list ALL calendar notes) is a deliberate "give me
+  // everything of this type" request, not an empty-input case — the local
+  // Electron app's own searchTitles (session.ts) already treats it that
+  // way (`LIKE '%%'` matches everything), so short-circuiting only here
+  // was a local/cloud parity bug: the local app worked, cloud silently
+  // never found any calendar/location notes at all.
+  if (!q && !type) return NextResponse.json([]);
 
   const workspaceId = await getWorkspaceId(supabase, userId);
   if (!workspaceId) return NextResponse.json({ error: "No workspace found for this user" }, { status: 404 });
