@@ -1,9 +1,9 @@
-// Placeholder — Phase 4 replaces this with the real note viewer/editor.
-// Exists now so tapping a note from FolderBrowser doesn't 404.
-export default function NotePage() {
-  return (
-    <div className="flex-1 flex items-center justify-center p-6 text-muted text-sm">
-      Note editing is coming in the next phase.
-    </div>
-  );
+import { NoteEditor } from "@/components/notes/NoteEditor";
+
+// key={noteId} forces a full remount on navigating between notes — that's
+// what gives NoteEditor's own unmount-cleanup effect a "flush before
+// switching notes" boundary for free, without a global editor store.
+export default async function NotePage({ params }: { params: Promise<{ noteId: string }> }) {
+  const { noteId } = await params;
+  return <NoteEditor key={noteId} noteId={noteId} />;
 }
