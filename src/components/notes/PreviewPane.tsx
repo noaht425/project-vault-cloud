@@ -56,7 +56,7 @@ export function PreviewPane({ body }: { body: string }) {
   }, [body]);
 
   return (
-    <div className="prose-note flex-1 overflow-y-auto p-4">
+    <div className="prose-note p-4">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         // react-markdown sanitizes hrefs by default and would strip our

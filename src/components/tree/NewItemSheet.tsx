@@ -6,12 +6,31 @@ import { useWorkspaceTree } from "./WorkspaceTreeProvider";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { TextField } from "@/components/ui/TextField";
 import { Button } from "@/components/ui/Button";
+import { defaultPcFrontmatter } from "@/lib/noteTypes/pc";
+import { defaultNpcFrontmatter } from "@/lib/noteTypes/npc";
 
 type Kind = "note" | "folder" | null;
+type NoteType = "note" | "pc" | "npc";
 
-// New notes default to the plain-note template (no per-type picker) —
-// structured note types get their own creation flow once their sheets
-// exist (Phase 2+, not this pass).
+const NOTE_TYPE_LABELS: Record<NoteType, string> = {
+  note: "Plain note",
+  pc: "PC",
+  npc: "NPC",
+};
+
+// Only note types with a mobile form (see NoteTypeForm.tsx) are offered
+// here — everything else stays creatable from Electron only, for now.
+function defaultFrontmatterFor(noteType: NoteType): Record<string, unknown> {
+  switch (noteType) {
+    case "pc":
+      return defaultPcFrontmatter();
+    case "npc":
+      return defaultNpcFrontmatter();
+    case "note":
+      return { type: "note", tags: [] };
+  }
+}
+
 export function NewItemSheet({
   folderId,
   open,
@@ -24,6 +43,7 @@ export function NewItemSheet({
   const router = useRouter();
   const { refresh } = useWorkspaceTree();
   const [kind, setKind] = useState<Kind>(null);
+  const [noteType, setNoteType] = useState<NoteType>("note");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -31,6 +51,7 @@ export function NewItemSheet({
   const close = (): void => {
     onClose();
     setKind(null);
+    setNoteType("note");
     setName("");
     setError(null);
   };
@@ -55,7 +76,7 @@ export function NewItemSheet({
         const res = await fetch("/api/notes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: trimmed, folderId, frontmatter: { type: "note", tags: [] }, body: "" }),
+          body: JSON.stringify({ name: trimmed, folderId, frontmatter: defaultFrontmatterFor(noteType), body: "" }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Could not create note");
@@ -89,6 +110,24 @@ export function NewItemSheet({
             void submit();
           }}
         >
+          {kind === "note" && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm text-muted">Type</span>
+              <div className="flex gap-2">
+                {(Object.keys(NOTE_TYPE_LABELS) as NoteType[]).map((t) => (
+                  <Button
+                    key={t}
+                    type="button"
+                    variant={noteType === t ? "primary" : "default"}
+                    className="flex-1"
+                    onClick={() => setNoteType(t)}
+                  >
+                    {NOTE_TYPE_LABELS[t]}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           <TextField
             label={kind === "note" ? "Note name" : "Folder name"}
             autoFocus

@@ -5,6 +5,7 @@ import { useWorkspaceTree } from "@/components/tree/WorkspaceTreeProvider";
 import { EditorTabs, type EditorMode } from "./EditorTabs";
 import { PreviewPane } from "./PreviewPane";
 import { ConflictBanner, type ConflictNote } from "./ConflictBanner";
+import { NoteTypeForm } from "@/components/notetypes/NoteTypeForm";
 
 // Matches the Electron Cloud editor's AUTOSAVE_DELAY_MS exactly
 // (cloudEditorStore.ts) — clear-and-reschedule on every keystroke.
@@ -25,6 +26,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
   const [note, setNote] = useState<NoteData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [bodyDraft, setBodyDraft] = useState("");
+  const [frontmatterDraft, setFrontmatterDraft] = useState<Record<string, unknown>>({});
   const [mode, setMode] = useState<EditorMode>("edit");
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [conflict, setConflict] = useState<ConflictNote | null>(null);
@@ -33,6 +35,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
   // need to read without re-subscribing the effect on every keystroke.
   const noteRef = useRef<NoteData | null>(null);
   const bodyDraftRef = useRef("");
+  const frontmatterDraftRef = useRef<Record<string, unknown>>({});
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
   const conflictRef = useRef<ConflictNote | null>(null);
@@ -53,6 +56,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
         if (!res.ok) throw new Error(data.error ?? "Could not load note");
         setNote(data);
         setBodyDraft(data.body);
+        setFrontmatterDraft(data.frontmatter);
         setStatus("idle");
       })
       .catch((err) => {
@@ -70,6 +74,9 @@ export function NoteEditor({ noteId }: { noteId: string }) {
     bodyDraftRef.current = bodyDraft;
   }, [bodyDraft]);
   useEffect(() => {
+    frontmatterDraftRef.current = frontmatterDraft;
+  }, [frontmatterDraft]);
+  useEffect(() => {
     conflictRef.current = conflict;
   }, [conflict]);
 
@@ -84,7 +91,11 @@ export function NoteEditor({ noteId }: { noteId: string }) {
       const res = await fetch(`/api/notes/${noteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version: current.version, body: bodyDraftRef.current }),
+        body: JSON.stringify({
+          version: current.version,
+          body: bodyDraftRef.current,
+          frontmatter: frontmatterDraftRef.current,
+        }),
       });
       const data = await res.json();
       if (res.status === 409) {
@@ -130,7 +141,11 @@ export function NoteEditor({ noteId }: { noteId: string }) {
       const res = await fetch(`/api/notes/${noteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version: conflict.version, body: bodyDraftRef.current }),
+        body: JSON.stringify({
+          version: conflict.version,
+          body: bodyDraftRef.current,
+          frontmatter: frontmatterDraftRef.current,
+        }),
       });
       const data = await res.json();
       if (res.status === 409) {
@@ -154,9 +169,15 @@ export function NoteEditor({ noteId }: { noteId: string }) {
     if (!conflict) return;
     setNote(conflict);
     setBodyDraft(conflict.body);
+    setFrontmatterDraft(conflict.frontmatter);
     setConflict(null);
     dirtyRef.current = false;
     setStatus("idle");
+  };
+
+  const updateFrontmatter = (patch: Record<string, unknown>): void => {
+    setFrontmatterDraft((prev) => ({ ...prev, ...patch }));
+    scheduleSave();
   };
 
   if (loadError) {
@@ -169,7 +190,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {conflict && <ConflictBanner current={conflict} onKeepMine={() => void keepMine()} onDiscardMine={discardMine} />}
-      <div className="flex items-center justify-between border-b border-border">
+      <div className="shrink-0 flex items-center justify-between border-b border-border">
         <h1 className="px-4 py-2 font-serif text-base truncate">{note.name}</h1>
         <span className="px-4 text-xs text-muted shrink-0">
           {status === "saving" && "Saving…"}
@@ -178,20 +199,30 @@ export function NoteEditor({ noteId }: { noteId: string }) {
           {status === "error" && !conflict && "Couldn't save — retrying"}
         </span>
       </div>
-      <EditorTabs mode={mode} onChange={setMode} />
-      {mode === "edit" ? (
-        <textarea
-          className="flex-1 resize-none border-0 rounded-none focus:outline-none p-4 font-mono text-sm leading-relaxed"
-          value={bodyDraft}
-          onChange={(e) => {
-            setBodyDraft(e.target.value);
-            scheduleSave();
-          }}
-          placeholder="Start writing…"
-        />
-      ) : (
-        <PreviewPane body={bodyDraft} />
-      )}
+      <div className="shrink-0">
+        <EditorTabs mode={mode} onChange={setMode} />
+      </div>
+      {/* NoteTypeForm (when the type has one) can be tall enough on its own
+          to push the body editor off-screen — this wrapper scrolls as one
+          unit so a long PC/NPC form doesn't squish the textarea down to
+          nothing, while the title/tabs above stay reachable without
+          scrolling back up. */}
+      <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
+        <NoteTypeForm frontmatter={frontmatterDraft} onChange={updateFrontmatter} />
+        {mode === "edit" ? (
+          <textarea
+            className="flex-1 min-h-[40vh] resize-none border-0 rounded-none focus:outline-none p-4 font-mono text-sm leading-relaxed"
+            value={bodyDraft}
+            onChange={(e) => {
+              setBodyDraft(e.target.value);
+              scheduleSave();
+            }}
+            placeholder="Start writing…"
+          />
+        ) : (
+          <PreviewPane body={bodyDraft} />
+        )}
+      </div>
     </div>
   );
 }
