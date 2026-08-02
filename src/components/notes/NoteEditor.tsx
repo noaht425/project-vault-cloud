@@ -39,10 +39,13 @@ export function NoteEditor({ noteId }: { noteId: string }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
+    // No need to reset note/loadError/conflict to their defaults here —
+    // this effect only ever runs once per mounted instance (the route
+    // wrapper key-remounts NoteEditor per noteId, see notes/[noteId]/
+    // page.tsx), so they're already at those defaults. Setting them again
+    // synchronously in the effect body would trip react-hooks/
+    // set-state-in-effect for no actual benefit.
     let cancelled = false;
-    setNote(null);
-    setLoadError(null);
-    setConflict(null);
     fetch(`/api/notes/${noteId}`)
       .then(async (res) => {
         const data = await res.json();

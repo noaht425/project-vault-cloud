@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
@@ -32,6 +33,11 @@ export function Shell({ userEmail, children }: { userEmail: string | null; child
           <span className="font-serif text-base">Project Vault</span>
           <div className="flex items-center gap-2">
             {userEmail && <span className="text-sm text-muted hidden sm:inline">{userEmail}</span>}
+            <Link href="/search">
+              <Button variant="ghost" aria-label="Search">
+                Search
+              </Button>
+            </Link>
             <Button variant="ghost" onClick={() => void signOut()} disabled={signingOut}>
               {signingOut ? "Signing out…" : "Sign out"}
             </Button>

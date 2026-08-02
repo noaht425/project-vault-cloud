@@ -36,7 +36,14 @@ export function WorkspaceTreeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // Deferred a tick so refresh()'s own synchronous setLoading(true)/
+    // setError(null) prefix doesn't run as part of this effect's own
+    // synchronous execution (react-hooks/set-state-in-effect) — refresh()
+    // is also called directly from event handlers elsewhere (after
+    // create/rename/delete), where that immediate feedback is fine and
+    // isn't flagged, since those aren't effect bodies.
+    const timer = setTimeout(() => void refresh(), 0);
+    return () => clearTimeout(timer);
   }, [refresh]);
 
   return (
