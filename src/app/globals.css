@@ -1,26 +1,110 @@
 @import "tailwindcss";
 
+/* Ported from the Electron app's src/renderer/src/styles.css — same dark
+   theme, same restrained/no-gradients/one-accent aesthetic, so the web app
+   reads as the same product rather than a different-looking one. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --font-serif: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg-app: #1e1e1e;
+  --bg-sidebar: #191919;
+  --bg-panel: #202020;
+  --bg-hover: #2a2a2a;
+  --bg-active: #363636;
+  --text-normal: #dcdcdc;
+  --text-muted: #999;
+  --accent: #7c8cff;
+  --border: #2e2e2e;
+  --warning: #e0a63c;
+  --danger: #d9534f;
+  --positive: #6bab6f;
+  --romantic: #d67ab1;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-app: var(--bg-app);
+  --color-sidebar: var(--bg-sidebar);
+  --color-panel: var(--bg-panel);
+  --color-hover: var(--bg-hover);
+  --color-active: var(--bg-active);
+  --color-normal: var(--text-normal);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-positive: var(--positive);
+  --color-romantic: var(--romantic);
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100%;
+}
+
+/* Layered (not bare) so component-level Tailwind utility classes — e.g. a
+   <Button variant="primary"> overriding the default background — win
+   without needing !important. Unlayered CSS always beats layered CSS
+   regardless of source order, so these element defaults have to live in a
+   layer themselves to stay overridable. */
+@layer base {
+  body {
+    margin: 0;
+    background: var(--bg-app);
+    color: var(--text-normal);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    /* iOS safe-area padding for standalone/installed mode — status bar and
+       home indicator would otherwise overlap fixed top/bottom chrome. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  button {
+    background: var(--bg-hover);
+    color: var(--text-normal);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  }
+
+  button:hover {
+    background: var(--bg-active);
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  input,
+  textarea {
+    background: var(--bg-panel);
+    color: var(--text-normal);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 15px;
+    font-family: var(--font-sans);
+  }
+
+  input:focus,
+  textarea:focus,
+  button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  a {
+    color: var(--accent);
+  }
 }
