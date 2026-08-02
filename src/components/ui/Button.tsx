@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes } from "react";
 
-type ButtonVariant = "default" | "primary" | "ghost";
+type ButtonVariant = "default" | "primary" | "ghost" | "danger";
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // Plain <button> is already themed via globals.css's @layer base — this
@@ -11,6 +11,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // Borderless icon/text action — same "ghost" look already established in
   // the Electron app's icon-only buttons.
   ghost: "bg-transparent border-transparent hover:bg-hover",
+  danger: "bg-danger border-danger text-white hover:bg-danger hover:opacity-90",
 };
 
 export function Button({
