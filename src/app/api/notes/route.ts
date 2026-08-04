@@ -28,6 +28,11 @@ export async function GET(request: Request) {
   const workspaceId = await getWorkspaceId(supabase, userId);
   if (!workspaceId) return NextResponse.json({ error: "No workspace found for this user" }, { status: 404 });
 
+  // Escape ILIKE's own wildcard characters so a title that happens to
+  // contain a literal "%" or "_" (e.g. "100% Chance") is searched for
+  // literally instead of the character acting as a pattern wildcard.
+  const escapedQ = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+
   // Kept in sync with the local Electron app's own searchTitles cap
   // (SEARCH_TITLES_LIMIT, session.ts) — a no-type-filter picker (Family
   // Tree's person picker) can span every note in the workspace, and a low
@@ -37,7 +42,7 @@ export async function GET(request: Request) {
     .from("notes")
     .select("id, name")
     .eq("workspace_id", workspaceId)
-    .ilike("name", `%${q}%`)
+    .ilike("name", `%${escapedQ}%`)
     .order("name")
     .limit(500);
   if (type) query = query.eq("note_type", type);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
 
@@ -61,10 +61,11 @@ export function PreviewPane({ body }: { body: string }) {
         remarkPlugins={[remarkGfm]}
         // react-markdown sanitizes hrefs by default and would strip our
         // "wikilink:" scheme before it ever reached the `a` override below.
-        // Safe here: this markdown comes from the note's own content, not
-        // untrusted remote input, and the real href never drives navigation
-        // directly — the `a` override always decides what a click does.
-        urlTransform={(url) => url}
+        // Let wikilink: through untouched (it's our own encodeURIComponent
+        // output, never rendered as a real href) and defer to the default
+        // sanitizer for everything else, so pasted/imported note content
+        // can't smuggle a javascript: or data: URI past it.
+        urlTransform={(url) => (url.startsWith("wikilink:") ? url : defaultUrlTransform(url))}
         components={{
           a: ({ href, children }) => {
             if (href?.startsWith("wikilink:")) {

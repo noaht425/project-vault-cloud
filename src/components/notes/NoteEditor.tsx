@@ -196,7 +196,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
           {status === "saving" && "Saving…"}
           {status === "dirty" && "Unsaved changes"}
           {status === "saved" && "Saved"}
-          {status === "error" && !conflict && "Couldn't save — retrying"}
+          {status === "error" && !conflict && "Couldn't save"}
         </span>
       </div>
       <div className="shrink-0">
