@@ -19,6 +19,7 @@ export default function SearchPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query.trim();
@@ -32,10 +33,28 @@ export default function SearchPage() {
     // the time this timer is even scheduled.
     const timer = setTimeout(() => {
       setLoading(true);
+      setError(null);
       fetch(`/api/search?q=${encodeURIComponent(q)}`)
-        .then((res) => res.json())
+        .then(async (res) => {
+          // A non-2xx response (401 on an expired session, 404 with no
+          // workspace, 400 on a query error) is still valid JSON — without
+          // this check, `data` becomes `{ error: "..." }` and the `.map()`
+          // below throws since that's not an array.
+          if (!res.ok) {
+            const body = await res.json().catch(() => null);
+            throw new Error(body?.error ?? `Search failed (${res.status})`);
+          }
+          return res.json();
+        })
         .then((data) => {
           if (!cancelled) setResults(data);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.error("Search failed:", err);
+            setError(err instanceof Error ? err.message : String(err));
+            setResults([]);
+          }
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -65,6 +84,8 @@ export default function SearchPage() {
           <p className="p-6 text-center text-muted text-sm">Search across every note in your workspace.</p>
         ) : loading ? (
           <p className="p-6 text-center text-muted text-sm">Searching…</p>
+        ) : error ? (
+          <p className="p-6 text-center text-danger text-sm">{error}</p>
         ) : results?.length === 0 ? (
           <p className="p-6 text-center text-muted text-sm">No matches.</p>
         ) : (

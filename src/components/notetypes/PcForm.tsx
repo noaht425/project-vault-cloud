@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { pcFrontmatterSchema } from "@/lib/noteTypes/pc";
 import type { AbilityKey } from "@/lib/noteTypes/creatureStats";
 import { AbilityScoreGrid } from "./AbilityScoreGrid";
@@ -16,7 +17,10 @@ export function PcForm({
   frontmatter: Record<string, unknown>;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
-  const data = pcFrontmatterSchema.parse(frontmatter);
+  // Same memoization PcSheet.tsx already has — without it, editing the
+  // note's unrelated body text re-parses/re-validates frontmatter on every
+  // keystroke since NoteEditor re-renders this on every draft change.
+  const data = useMemo(() => pcFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   const updateStat = (key: AbilityKey, value: number): void => {
     onChange({ stats: { ...data.stats, [key]: value } });

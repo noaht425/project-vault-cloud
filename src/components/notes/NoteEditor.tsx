@@ -129,7 +129,29 @@ export function NoteEditor({ noteId }: { noteId: string }) {
   useEffect(() => {
     return () => {
       clearTimeout(timerRef.current);
-      if (dirtyRef.current && !conflictRef.current) void save();
+      if (!dirtyRef.current) return;
+      if (conflictRef.current) {
+        // A conflict banner was still showing when the user navigated away
+        // without clicking either resolution button — the banner's own text
+        // promises "your unsaved changes are still here," so silently
+        // dropping them here would be a real, easy-to-hit case of exactly
+        // that. Flushes with the conflict's own (newer) version as the
+        // base, same request `keepMine()` makes — there's no UI left to
+        // show a second conflict or a save error if this itself races, so
+        // those outcomes are just logged, not surfaced.
+        const conflictVersion = conflictRef.current.version;
+        void fetch(`/api/notes/${noteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            version: conflictVersion,
+            body: bodyDraftRef.current,
+            frontmatter: frontmatterDraftRef.current,
+          }),
+        }).catch((err) => console.error("Failed to flush note on unmount after a conflict:", err));
+      } else {
+        void save();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);

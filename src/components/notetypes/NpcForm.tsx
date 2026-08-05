@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { npcFrontmatterSchema } from "@/lib/noteTypes/npc";
 import type { AbilityKey } from "@/lib/noteTypes/creatureStats";
 import { AbilityScoreGrid } from "./AbilityScoreGrid";
@@ -13,7 +14,10 @@ export function NpcForm({
   frontmatter: Record<string, unknown>;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
-  const data = npcFrontmatterSchema.parse(frontmatter);
+  // Same memoization NpcSheet.tsx already has — without it, editing the
+  // note's unrelated body text re-parses/re-validates frontmatter on every
+  // keystroke since NoteEditor re-renders this on every draft change.
+  const data = useMemo(() => npcFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   const updateStat = (key: AbilityKey, value: number): void => {
     onChange({ stats: { ...data.stats, [key]: value } });
