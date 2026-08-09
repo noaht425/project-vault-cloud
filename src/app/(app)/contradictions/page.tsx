@@ -10,7 +10,7 @@ import {
   type EventForCheck,
   type ParentChildForCheck,
 } from "@/lib/contradictionCheck";
-import { parseRelationships } from "@/lib/familyTreeRelationships";
+import { parseRelationships } from "@/lib/noteTypes/familyTree";
 import { extractWikiLinkTitles } from "@/lib/wikiLinks";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
 import { Button } from "@/components/ui/Button";

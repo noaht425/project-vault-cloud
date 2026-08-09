@@ -202,6 +202,14 @@ export function NoteEditor({ noteId }: { noteId: string }) {
     scheduleSave();
   };
 
+  // Only FamilyTreeForm uses this (its add/remove-relationship controls
+  // rewrite the body's "## Relationships" section) — every other
+  // NoteTypeForm only ever calls updateFrontmatter.
+  const updateBody = (newBody: string): void => {
+    setBodyDraft(newBody);
+    scheduleSave();
+  };
+
   if (loadError) {
     return <div className="flex-1 flex items-center justify-center p-6 text-danger text-sm text-center">{loadError}</div>;
   }
@@ -230,7 +238,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
           nothing, while the title/tabs above stay reachable without
           scrolling back up. */}
       <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-        <NoteTypeForm frontmatter={frontmatterDraft} body={bodyDraft} onChange={updateFrontmatter} />
+        <NoteTypeForm frontmatter={frontmatterDraft} body={bodyDraft} onChange={updateFrontmatter} onBodyChange={updateBody} />
         {mode === "edit" ? (
           <textarea
             className="flex-1 min-h-[40vh] resize-none border-0 rounded-none focus:outline-none p-4 font-mono text-sm leading-relaxed"
