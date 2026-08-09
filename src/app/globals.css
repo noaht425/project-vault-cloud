@@ -93,9 +93,13 @@ body {
      and terrain/line-type color swatches both rendered as empty rounded
      rectangles). Electron's own styles.css never had a bare `input { }`
      rule for exactly this reason — every input rule there is scoped to a
-     specific class or type. */
+     specific class or type. `select` never had ANY base styling at all
+     (confirmed on a real phone: From/To dropdowns had no visible border) —
+     added here alongside input/textarea rather than left to the browser's
+     own default appearance, which doesn't match this app's dark theme. */
   input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]),
-  textarea {
+  textarea,
+  select {
     background: var(--bg-panel);
     color: var(--text-normal);
     border: 1px solid var(--border);
@@ -107,6 +111,7 @@ body {
 
   input:focus,
   textarea:focus,
+  select:focus,
   button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
