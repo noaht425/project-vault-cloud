@@ -18,6 +18,7 @@ import { defaultClimateFrontmatter } from "@/lib/noteTypes/climate";
 import { defaultLanguageFrontmatter } from "@/lib/noteTypes/language";
 import { defaultCalendarFrontmatter } from "@/lib/noteTypes/calendar";
 import { defaultFamilyTreeFrontmatter } from "@/lib/noteTypes/familyTree";
+import { defaultSettlementFrontmatter } from "@/lib/noteTypes/settlement";
 
 type Kind = "note" | "folder" | null;
 type NoteType =
@@ -33,7 +34,8 @@ type NoteType =
   | "climate"
   | "language"
   | "calendar"
-  | "family-tree";
+  | "family-tree"
+  | "settlement";
 
 const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   note: "Plain note",
@@ -49,6 +51,7 @@ const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   language: "Language",
   calendar: "Calendar",
   "family-tree": "Family Tree",
+  settlement: "Settlement",
 };
 
 // Only note types with a mobile form (see NoteTypeForm.tsx) are offered
@@ -79,6 +82,8 @@ function defaultFrontmatterFor(noteType: NoteType): Record<string, unknown> {
       return defaultCalendarFrontmatter();
     case "family-tree":
       return defaultFamilyTreeFrontmatter();
+    case "settlement":
+      return defaultSettlementFrontmatter();
     case "note":
       return { type: "note", tags: [] };
   }
