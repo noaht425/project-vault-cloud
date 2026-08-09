@@ -366,24 +366,39 @@ export function MapCanvas({
 
   // Touch equivalent of the mouse pan/click handling above — a single
   // finger either pans (moved past CLICK_MOVEMENT_THRESHOLD) or taps (place
-  // a point), same distinction, same window-level listeners so a finger
-  // sliding past the SVG's edge still pans.
-  const handleTouchStart = (e: React.TouchEvent<SVGSVGElement>): void => {
-    if (e.touches.length === 1) {
-      const t = e.touches[0];
-      dragRef.current = { startX: t.clientX, startY: t.clientY, origX: viewBox.x, origY: viewBox.y, moved: false };
-      pinchRef.current = null;
-    } else if (e.touches.length === 2) {
-      dragRef.current = null;
-      const [a, b] = [e.touches[0], e.touches[1]];
-      pinchRef.current = {
-        startDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
-        startMidX: (a.clientX + b.clientX) / 2,
-        startMidY: (a.clientY + b.clientY) / 2,
-        origVb: viewBoxRef.current,
-      };
-    }
-  };
+  // a point), same distinction. touchstart is attached directly to the SVG
+  // (like onMouseDown — a gesture has to start on the canvas), touchmove/
+  // touchend go on window (like the mouse listeners) so a finger sliding
+  // past the SVG's edge still pans. All three need {passive: false} +
+  // preventDefault(), not just touchmove during an actual drag: without it,
+  // a real device fires a *synthetic* mousedown/mouseup/click ~afterward
+  // for every tap, which the mouse listeners below then treat as a SECOND,
+  // independent click — confirmed on a real phone as taps registering 2
+  // points instead of 1 (occasionally more, depending on how fast the
+  // synthetic events landed relative to the next tap).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handleTouchStart = (e: TouchEvent): void => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        dragRef.current = { startX: t.clientX, startY: t.clientY, origX: viewBoxRef.current.x, origY: viewBoxRef.current.y, moved: false };
+        pinchRef.current = null;
+      } else if (e.touches.length === 2) {
+        dragRef.current = null;
+        const [a, b] = [e.touches[0], e.touches[1]];
+        pinchRef.current = {
+          startDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
+          startMidX: (a.clientX + b.clientX) / 2,
+          startMidY: (a.clientY + b.clientY) / 2,
+          origVb: viewBoxRef.current,
+        };
+      }
+    };
+    svg.addEventListener("touchstart", handleTouchStart, { passive: false });
+    return () => svg.removeEventListener("touchstart", handleTouchStart);
+  }, []);
 
   useEffect(() => {
     const handleTouchMove = (e: TouchEvent): void => {
@@ -433,6 +448,7 @@ export function MapCanvas({
       }
     };
     const handleTouchEnd = (e: TouchEvent): void => {
+      e.preventDefault();
       const drag = dragRef.current;
       const pinch = pinchRef.current;
       if (e.touches.length === 0) {
@@ -453,8 +469,8 @@ export function MapCanvas({
       }
     };
     window.addEventListener("touchmove", handleTouchMove, { passive: false });
-    window.addEventListener("touchend", handleTouchEnd);
-    window.addEventListener("touchcancel", handleTouchEnd);
+    window.addEventListener("touchend", handleTouchEnd, { passive: false });
+    window.addEventListener("touchcancel", handleTouchEnd, { passive: false });
     return () => {
       window.removeEventListener("touchmove", handleTouchMove);
       window.removeEventListener("touchend", handleTouchEnd);
@@ -488,7 +504,6 @@ export function MapCanvas({
         style={{ cursor: mode === "view" ? "grab" : "crosshair" }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
-        onTouchStart={handleTouchStart}
       >
         <image href={imageUrl} x={0} y={0} width={imageWidth} height={imageHeight} />
 

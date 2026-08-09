@@ -86,7 +86,15 @@ body {
     cursor: default;
   }
 
-  input,
+  /* Excludes checkbox/radio/color/range/file — those render their own
+     native control (a checkmark, a color swatch, a slider thumb) that this
+     padded-box treatment stomps on without replacing, leaving what looks
+     like a blank box (confirmed on a real phone: "Notable only" checkboxes
+     and terrain/line-type color swatches both rendered as empty rounded
+     rectangles). Electron's own styles.css never had a bare `input { }`
+     rule for exactly this reason — every input rule there is scoped to a
+     specific class or type. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]),
   textarea {
     background: var(--bg-panel);
     color: var(--text-normal);
