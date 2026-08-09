@@ -11,6 +11,7 @@ import { LanguageForm } from "./LanguageForm";
 import { CalendarForm } from "./CalendarForm";
 import { FamilyTreeForm } from "./FamilyTreeForm";
 import { SettlementForm } from "./SettlementForm";
+import { MapForm } from "./MapForm";
 
 // Mirrors the Electron app's SheetView.tsx dispatcher — every unported type
 // (including plain "note") falls through to null and NoteEditor just shows
@@ -60,6 +61,8 @@ export function NoteTypeForm({
       return <FamilyTreeForm frontmatter={frontmatter} body={body} onChange={onChange} onBodyChange={onBodyChange} />;
     case "settlement":
       return <SettlementForm frontmatter={frontmatter} onChange={onChange} />;
+    case "map":
+      return <MapForm frontmatter={frontmatter} onChange={onChange} />;
     default:
       return null;
   }

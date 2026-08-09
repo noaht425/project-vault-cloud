@@ -20,6 +20,11 @@ interface EventSummary {
   summary: string;
   noteType: string;
   structuredDate?: unknown;
+  // Only ever set for noteType === "event" entries (a location note's
+  // title, from that note's own `location` field) — History-section-
+  // derived facts have no such concept. Consumed by the Map×Timeline
+  // crossover (mapTimeline.ts) to match an event to a pin on a given map.
+  location?: string | null;
 }
 
 // The whole workspace's history, not just note_type='event' notes — every
@@ -54,6 +59,7 @@ export async function GET(request: Request) {
         summary: typeof note.frontmatter.summary === "string" ? note.frontmatter.summary : "",
         noteType: "event",
         structuredDate: note.frontmatter.structuredDate ?? null,
+        location: typeof note.frontmatter.location === "string" ? note.frontmatter.location : null,
       });
     }
 
