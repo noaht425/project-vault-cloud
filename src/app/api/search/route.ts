@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
 import { buildSnippet, extractSearchableText, matchesAllTokens, tokenize } from "@/lib/search";
+import { dbErrorResponse } from "@/lib/dbError";
 
 interface SearchRow {
   id: string;
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
   if (type) query = query.eq("note_type", type);
 
   const { data: notes, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/search");
 
   const results = (notes as SearchRow[])
     .map((note) => {

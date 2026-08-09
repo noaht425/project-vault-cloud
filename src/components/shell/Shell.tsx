@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { WorkspaceTreeProvider } from "@/components/tree/WorkspaceTreeProvider";
 import { Sidebar } from "@/components/tree/Sidebar";
+import { DiceRoller } from "@/components/dice/DiceRoller";
 
 // Nav chrome shared by every authenticated route. WorkspaceTreeProvider
 // lives here (not in a specific page) so the fetched tree survives
@@ -29,10 +30,26 @@ export function Shell({ userEmail, children }: { userEmail: string | null; child
   return (
     <WorkspaceTreeProvider>
       <div className="min-h-full flex flex-col">
-        <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-sidebar">
+        <header className="flex items-center justify-between gap-3 gap-y-2 flex-wrap px-4 py-3 border-b border-border bg-sidebar">
           <span className="font-serif text-base">Project Vault</span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {userEmail && <span className="text-sm text-muted hidden sm:inline">{userEmail}</span>}
+            <DiceRoller />
+            <Link href="/events">
+              <Button variant="ghost" aria-label="Events">
+                Events
+              </Button>
+            </Link>
+            <Link href="/initiative">
+              <Button variant="ghost" aria-label="Initiative tracker">
+                Initiative
+              </Button>
+            </Link>
+            <Link href="/contradictions">
+              <Button variant="ghost" aria-label="Contradiction check">
+                Checks
+              </Button>
+            </Link>
             <Link href="/search">
               <Button variant="ghost" aria-label="Search">
                 Search

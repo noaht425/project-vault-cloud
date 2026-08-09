@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
 import { extractWikiLinkTitles } from "@/lib/wikiLinks";
+import { dbErrorResponse } from "@/lib/dbError";
 
 // Which other notes in this workspace link to this one. No links table
 // (unlike the local app's SQLite index) — extracts [[wiki-links]] from
@@ -22,7 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
-  if (targetError) return NextResponse.json({ error: targetError.message }, { status: 400 });
+  if (targetError) return dbErrorResponse(targetError, "GET /api/notes/[id]/backlinks target lookup");
   if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const { data: notes, error } = await supabase
@@ -30,7 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     .select("id, name, body")
     .eq("workspace_id", workspaceId)
     .neq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/notes/[id]/backlinks");
 
   const targetNameLower = target.name.toLowerCase();
   const backlinks = (notes as { id: string; name: string; body: string }[])

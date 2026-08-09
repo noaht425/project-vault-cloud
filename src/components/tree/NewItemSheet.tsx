@@ -8,14 +8,44 @@ import { TextField } from "@/components/ui/TextField";
 import { Button } from "@/components/ui/Button";
 import { defaultPcFrontmatter } from "@/lib/noteTypes/pc";
 import { defaultNpcFrontmatter } from "@/lib/noteTypes/npc";
+import { defaultLocationFrontmatter } from "@/lib/noteTypes/location";
+import { defaultItemFrontmatter } from "@/lib/noteTypes/item";
+import { defaultSessionFrontmatter } from "@/lib/noteTypes/session";
+import { defaultEventFrontmatter } from "@/lib/noteTypes/event";
+import { defaultFactionFrontmatter } from "@/lib/noteTypes/faction";
+import { defaultClassReferenceFrontmatter } from "@/lib/noteTypes/classReference";
+import { defaultClimateFrontmatter } from "@/lib/noteTypes/climate";
+import { defaultLanguageFrontmatter } from "@/lib/noteTypes/language";
+import { defaultCalendarFrontmatter } from "@/lib/noteTypes/calendar";
 
 type Kind = "note" | "folder" | null;
-type NoteType = "note" | "pc" | "npc";
+type NoteType =
+  | "note"
+  | "pc"
+  | "npc"
+  | "location"
+  | "item"
+  | "session"
+  | "event"
+  | "faction"
+  | "class-reference"
+  | "climate"
+  | "language"
+  | "calendar";
 
 const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   note: "Plain note",
   pc: "PC",
   npc: "NPC",
+  location: "Location",
+  item: "Item",
+  session: "Session",
+  event: "Event",
+  faction: "Faction",
+  "class-reference": "Class Reference",
+  climate: "Climate",
+  language: "Language",
+  calendar: "Calendar",
 };
 
 // Only note types with a mobile form (see NoteTypeForm.tsx) are offered
@@ -26,6 +56,24 @@ function defaultFrontmatterFor(noteType: NoteType): Record<string, unknown> {
       return defaultPcFrontmatter();
     case "npc":
       return defaultNpcFrontmatter();
+    case "location":
+      return defaultLocationFrontmatter();
+    case "item":
+      return defaultItemFrontmatter();
+    case "session":
+      return defaultSessionFrontmatter();
+    case "event":
+      return defaultEventFrontmatter();
+    case "faction":
+      return defaultFactionFrontmatter();
+    case "class-reference":
+      return defaultClassReferenceFrontmatter();
+    case "climate":
+      return defaultClimateFrontmatter();
+    case "language":
+      return defaultLanguageFrontmatter();
+    case "calendar":
+      return defaultCalendarFrontmatter();
     case "note":
       return { type: "note", tags: [] };
   }
@@ -113,13 +161,13 @@ export function NewItemSheet({
           {kind === "note" && (
             <div className="flex flex-col gap-1.5">
               <span className="text-sm text-muted">Type</span>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {(Object.keys(NOTE_TYPE_LABELS) as NoteType[]).map((t) => (
                   <Button
                     key={t}
                     type="button"
                     variant={noteType === t ? "primary" : "default"}
-                    className="flex-1"
+                    className="flex-1 min-w-[85px]"
                     onClick={() => setNoteType(t)}
                   >
                     {NOTE_TYPE_LABELS[t]}

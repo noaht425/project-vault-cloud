@@ -3,6 +3,7 @@ import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
 import { extractWikiLinkTitles } from "@/lib/wikiLinks";
 import { buildGraph } from "@/lib/graph";
+import { dbErrorResponse } from "@/lib/dbError";
 
 // Every note in the workspace as a node, every [[wiki-link]] as an edge —
 // mirrors the local app's graph:get. See src/lib/graph.ts for the actual
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
     .from("notes")
     .select("id, name, note_type, body")
     .eq("workspace_id", workspaceId);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/graph");
 
   const rows = notes as { id: string; name: string; note_type: string | null; body: string }[];
   const links = rows.flatMap((note) =>

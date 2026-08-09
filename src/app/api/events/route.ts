@@ -3,6 +3,7 @@ import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
 import { extractHistoryFacts, extractBornDiedFacts } from "@/lib/worldTimeline";
 import { compareWorldDates } from "@/lib/worldDate";
+import { dbErrorResponse } from "@/lib/dbError";
 
 interface EventRow {
   id: string;
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
     .from("notes")
     .select("id, name, note_type, body, frontmatter")
     .eq("workspace_id", workspaceId);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/events");
 
   const entries: EventSummary[] = [];
   for (const note of notes as EventRow[]) {

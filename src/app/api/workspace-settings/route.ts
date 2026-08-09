@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
+import { dbErrorResponse } from "@/lib/dbError";
 
 // Build step 6 of the calendar/timeline system (see the Electron app's
 // docs/plans/2026-07-28-calendar-timeline-system.md — this repo doesn't
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
     .select("active_calendar_titles, campaign_date")
     .eq("id", workspaceId)
     .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/workspace-settings");
 
   return NextResponse.json({
     activeCalendarNoteTitles: data.active_calendar_titles ?? [],
@@ -85,7 +86,7 @@ export async function PATCH(request: Request) {
     .eq("id", workspaceId)
     .select("active_calendar_titles, campaign_date")
     .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "PATCH /api/workspace-settings");
 
   return NextResponse.json({
     activeCalendarNoteTitles: data.active_calendar_titles ?? [],

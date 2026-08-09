@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
 import { computeDateMigration, type CalendarCandidate, type CalendarDefinition } from "@/lib/dateMigration";
+import { dbErrorResponse } from "@/lib/dbError";
 
 interface NoteRow {
   id: string;
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
     .select("id, name, note_type, frontmatter, version")
     .eq("workspace_id", workspaceId)
     .in("note_type", ["event", "calendar"]);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "POST /api/migrate-dates");
 
   const calendars: CalendarCandidate[] = [];
   const events: { id: string; date: string; hasStructuredDate: boolean }[] = [];

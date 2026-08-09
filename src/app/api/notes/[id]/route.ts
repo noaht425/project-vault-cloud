@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
+import { dbErrorResponse } from "@/lib/dbError";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -42,7 +43,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     .select()
     .maybeSingle();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "PATCH /api/notes/[id]");
 
   if (!updated) {
     // Either the note doesn't exist, or the version didn't match — tell
@@ -64,7 +65,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
   const { data: deleted, error } = await supabase.from("notes").delete().eq("id", id).select().maybeSingle();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "DELETE /api/notes/[id]");
   if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ deleted: true });
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
+import { dbErrorResponse } from "@/lib/dbError";
 
 // Title-only search, scoped to the caller's workspace — mirrors the local
 // app's searchTitles (used for wiki-link autocomplete), not a full-text
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
   if (type) query = query.eq("note_type", type);
 
   const { data: notes, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/notes search");
   return NextResponse.json(notes);
 }
 
@@ -87,6 +88,6 @@ export async function POST(request: Request) {
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "POST /api/notes create");
   return NextResponse.json(note, { status: 201 });
 }

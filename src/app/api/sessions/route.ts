@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
+import { dbErrorResponse } from "@/lib/dbError";
 
 interface SessionRow {
   id: string;
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
     .select("id, name, frontmatter")
     .eq("workspace_id", workspaceId)
     .eq("note_type", "session");
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "GET /api/sessions");
 
   const summaries = (notes as SessionRow[])
     .map((note) => ({

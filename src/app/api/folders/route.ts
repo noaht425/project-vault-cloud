@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
+import { dbErrorResponse } from "@/lib/dbError";
 
 export async function POST(request: Request) {
   const authed = await getAuthedClient(request);
@@ -27,6 +28,6 @@ export async function POST(request: Request) {
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return dbErrorResponse(error, "POST /api/folders create");
   return NextResponse.json(folder, { status: 201 });
 }

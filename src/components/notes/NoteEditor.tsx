@@ -230,7 +230,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
           nothing, while the title/tabs above stay reachable without
           scrolling back up. */}
       <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-        <NoteTypeForm frontmatter={frontmatterDraft} onChange={updateFrontmatter} />
+        <NoteTypeForm frontmatter={frontmatterDraft} body={bodyDraft} onChange={updateFrontmatter} />
         {mode === "edit" ? (
           <textarea
             className="flex-1 min-h-[40vh] resize-none border-0 rounded-none focus:outline-none p-4 font-mono text-sm leading-relaxed"
