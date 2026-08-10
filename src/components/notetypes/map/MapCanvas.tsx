@@ -185,6 +185,7 @@ export function MapCanvas({
       pins.map((pin) => (
         <g
           key={pin.id}
+          data-map-pin="true"
           transform={`translate(${pin.x}, ${pin.y})`}
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
@@ -376,10 +377,21 @@ export function MapCanvas({
   // independent click — confirmed on a real phone as taps registering 2
   // points instead of 1 (occasionally more, depending on how fast the
   // synthetic events landed relative to the next tap).
+  //
+  // Pins opt out of this entirely (checked via e.target here, since a
+  // pin's own onTouchStart={stopPropagation} is a *React synthetic* handler
+  // — it can't stop this *native* listener, which sits on the actual <svg>
+  // DOM node, closer to the target than React's root-level delegated
+  // listener, so it always runs first regardless). Without this bail, a tap
+  // on a pin still fell through to pan-tracking/preventDefault here, which
+  // both suppressed the browser's synthesized click (so the pin's own
+  // onClick never fired) and, in view mode, invoked handleClickAt with no
+  // matching branch — taps on pins did nothing at all.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const handleTouchStart = (e: TouchEvent): void => {
+      if (e.target instanceof Element && e.target.closest("[data-map-pin]")) return;
       e.preventDefault();
       if (e.touches.length === 1) {
         const t = e.touches[0];

@@ -35,6 +35,7 @@ export function AddCombatantPanel({ onAdd }: { onAdd: (input: NewCombatantInput)
   const [matches, setMatches] = useState<TitleMatch[]>([]);
   const [selected, setSelected] = useState<TitleMatch | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewError, setPreviewError] = useState(false);
   const [count, setCount] = useState(1);
 
   const [adhocName, setAdhocName] = useState("");
@@ -69,14 +70,23 @@ export function AddCombatantPanel({ onAdd }: { onAdd: (input: NewCombatantInput)
     setSelected(match);
     setMatches([]);
     setQuery(match.name);
-    const note = await fetch(`/api/notes/${match.id}`).then((r) => r.json());
-    const data = match.kind === "npc" ? npcFrontmatterSchema.parse(note.frontmatter) : pcFrontmatterSchema.parse(note.frontmatter);
-    setPreview({
-      ac: data.ac,
-      maxHp: data.maxHp,
-      startingHp: data.hp,
-      initiativeBonus: abilityModifier(data.stats.dex),
-    });
+    setPreview(null);
+    setPreviewError(false);
+    try {
+      const res = await fetch(`/api/notes/${match.id}`);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const note = await res.json();
+      const data = match.kind === "npc" ? npcFrontmatterSchema.parse(note.frontmatter) : pcFrontmatterSchema.parse(note.frontmatter);
+      setPreview({
+        ac: data.ac,
+        maxHp: data.maxHp,
+        startingHp: data.hp,
+        initiativeBonus: abilityModifier(data.stats.dex),
+      });
+    } catch (err) {
+      console.error("Failed to load combatant preview:", err);
+      setPreviewError(true);
+    }
   };
 
   const resetNoteForm = (): void => {
@@ -156,6 +166,7 @@ export function AddCombatantPanel({ onAdd }: { onAdd: (input: NewCombatantInput)
               ))}
             </div>
           )}
+          {selected && previewError && <span className="text-sm text-danger">Couldn&apos;t load {selected.name}.</span>}
           {selected && preview && (
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-sm text-muted">

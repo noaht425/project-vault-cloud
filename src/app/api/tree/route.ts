@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
+import { dbErrorResponse } from "@/lib/dbError";
 
 // Shape mirrors the desktop app's TreeEntry (see Project Vault's
 // src/renderer/src/components/file-tree/FileTree.tsx): isDirectory +
@@ -32,8 +33,8 @@ export async function GET(request: Request) {
     supabase.from("folders").select("id, parent_id, name").eq("workspace_id", workspace.id),
     supabase.from("notes").select("id, folder_id, name, note_type, version").eq("workspace_id", workspace.id),
   ]);
-  if (foldersError) return NextResponse.json({ error: foldersError.message }, { status: 400 });
-  if (notesError) return NextResponse.json({ error: notesError.message }, { status: 400 });
+  if (foldersError) return dbErrorResponse(foldersError, "GET /api/tree folders");
+  if (notesError) return dbErrorResponse(notesError, "GET /api/tree notes");
 
   const build = (parentId: string | null): TreeNode[] => {
     const childFolders = (folders ?? [])

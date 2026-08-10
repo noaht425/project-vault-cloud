@@ -80,16 +80,21 @@ export function useTravelModes() {
   // same tradeoff Electron's store makes.
   const save = async (nextModes: TravelMode[]): Promise<void> => {
     if (!noteId) return;
+    const previousModes = modes;
     setModes(nextModes);
     const frontmatter = { type: "travel-modes", tags: [], modes: nextModes };
     const attempt = async (atVersion: number) => {
-      const res = await fetch(`/api/notes/${noteId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version: atVersion, frontmatter }),
-      });
-      const data = await res.json();
-      return { ok: res.ok, status: res.status, data };
+      try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version: atVersion, frontmatter }),
+        });
+        const data = await res.json();
+        return { ok: res.ok, status: res.status, data };
+      } catch {
+        return { ok: false, status: 0, data: null };
+      }
     };
 
     const result = await attempt(version);
@@ -99,8 +104,16 @@ export function useTravelModes() {
     }
     if (result.status === 409) {
       const retry = await attempt(result.data.current.version);
-      if (retry.ok) setVersion(retry.data.version);
+      if (retry.ok) {
+        setVersion(retry.data.version);
+        return;
+      }
     }
+    // Both the initial attempt and any 409 retry failed (network drop, 5xx,
+    // etc.) — revert the optimistic update rather than leaving local state
+    // silently diverged from what's actually saved.
+    console.error("Failed to save travel modes");
+    setModes(previousModes);
   };
 
   return { modes, loading, save };
