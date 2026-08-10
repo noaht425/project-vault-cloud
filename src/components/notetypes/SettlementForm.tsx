@@ -130,10 +130,24 @@ export function SettlementForm({
       {bulkSaving && <p className="text-sm text-muted">Saving residents/buildings…</p>}
       {bulkError && <p className="text-sm text-danger">{bulkError}</p>}
 
-      {tab === "setup" && <SettlementSetupTab data={data} updateFrontmatter={updateFrontmatter} />}
+      {/* Setup/Factions are mostly simple field rows and short lists (the
+          building-types table and race/gender relation grids are the
+          exceptions, already their own overflow-x-auto) — capped wider than
+          the plain note-type forms' md:max-w-3xl since those two tables
+          still want real room, but not left to stretch full-bleed on an
+          ultrawide monitor the way People/Buildings' own tables should. */}
+      {tab === "setup" && (
+        <div className="md:max-w-5xl md:mx-auto md:w-full">
+          <SettlementSetupTab data={data} updateFrontmatter={updateFrontmatter} />
+        </div>
+      )}
       {tab === "people" && <SettlementPeopleTab data={data} updateFrontmatter={updateFrontmatter} />}
       {tab === "buildings" && <SettlementBuildingsTab data={data} updateFrontmatter={updateFrontmatter} />}
-      {tab === "factions" && <SettlementFactionsTab data={data} />}
+      {tab === "factions" && (
+        <div className="md:max-w-5xl md:mx-auto md:w-full">
+          <SettlementFactionsTab data={data} />
+        </div>
+      )}
     </div>
   );
 }

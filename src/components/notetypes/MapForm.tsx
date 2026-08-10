@@ -272,7 +272,7 @@ export function MapForm({
   const effectiveScale = data.scaleMode === "latitude" ? derivedScale : data.scale;
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-5xl md:mx-auto md:w-full">
       <TextField label="Summary" value={data.summary} onChange={(e) => updateFrontmatter({ summary: e.target.value })} />
 
       <div className="flex items-center gap-2">
