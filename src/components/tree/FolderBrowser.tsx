@@ -12,7 +12,11 @@ import { Button } from "@/components/ui/Button";
 // the same data). No per-row icon, matching the desktop FileTree's own
 // plain-text convention — folders get a trailing "›" disclosure indicator
 // since tapping drills into a new screen here, unlike the desktop's
-// expand-in-place caret.
+// expand-in-place caret. Content pane alongside Sidebar's persistent tree
+// on desktop, not just the sole navigation surface the way it is on
+// mobile — "+ New" moves to a normal header button there instead of the
+// full-width bottom bar (thumb-reachable, matches every other mobile "add"
+// action in this app, but reads oddly under a list next to a nav sidebar).
 export function FolderBrowser({ folderId }: { folderId: string | null }) {
   const router = useRouter();
   const { tree, loading, error } = useWorkspaceTree();
@@ -30,6 +34,14 @@ export function FolderBrowser({ folderId }: { folderId: string | null }) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      <div className="hidden md:flex items-center justify-between px-4 py-3 border-b border-border">
+        <span className="text-sm text-muted">
+          {children.length} item{children.length === 1 ? "" : "s"}
+        </span>
+        <Button variant="primary" onClick={() => setNewItemOpen(true)}>
+          + New
+        </Button>
+      </div>
       <div className="flex-1 overflow-y-auto">
         {children.length === 0 && <p className="p-6 text-center text-muted text-sm">Nothing here yet.</p>}
         {children.map((node) => (
@@ -44,7 +56,7 @@ export function FolderBrowser({ folderId }: { folderId: string | null }) {
           </div>
         ))}
       </div>
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border md:hidden">
         <Button variant="primary" className="w-full" onClick={() => setNewItemOpen(true)}>
           + New
         </Button>
