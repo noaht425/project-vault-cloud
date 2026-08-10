@@ -15,7 +15,7 @@ export function ClassReferenceForm({
   const data = useMemo(() => classReferenceFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <div className="grid grid-cols-2 gap-3">
         <TextField label="Class" value={data.class} onChange={(e) => onChange({ class: e.target.value })} />
         <TextField label="Subclass" value={data.subclass} onChange={(e) => onChange({ subclass: e.target.value })} />

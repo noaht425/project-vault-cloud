@@ -70,7 +70,7 @@ export default function SearchPage() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
         <TextField
           label="Search"
           autoFocus
@@ -79,7 +79,7 @@ export default function SearchPage() {
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto md:max-w-3xl md:mx-auto md:w-full">
         {!trimmedQuery ? (
           <p className="p-6 text-center text-muted text-sm">Search across every note in your workspace.</p>
         ) : loading ? (

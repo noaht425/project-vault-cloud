@@ -20,7 +20,7 @@ export function ClimateForm({
   const data = useMemo(() => climateFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <TextField label="Summary" value={data.summary} onChange={(e) => onChange({ summary: e.target.value })} />
       <TextField
         label="Calendar"

@@ -23,7 +23,7 @@ export function LanguageForm({
   const data = useMemo(() => languageFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <TextField label="Summary" value={data.summary} onChange={(e) => onChange({ summary: e.target.value })} />
       <p className="text-sm text-muted">
         Add a &quot;## Word: word&quot; heading in the body below for each dictionary entry (optional

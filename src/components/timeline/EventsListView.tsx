@@ -35,7 +35,7 @@ export function EventsListView({ onOpenEvent }: { onOpenEvent: (id: string) => v
   }, []);
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex-1 overflow-y-auto md:max-w-3xl md:mx-auto md:w-full">
       {error && <p className="p-6 text-center text-danger text-sm">{error}</p>}
       {events === null && !error ? (
         <p className="p-6 text-center text-muted text-sm">Loading…</p>

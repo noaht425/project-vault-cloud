@@ -13,7 +13,7 @@ export function SessionForm({
   const data = useMemo(() => sessionFrontmatterSchema.parse(frontmatter), [frontmatter]);
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <div className="grid grid-cols-2 gap-3">
         <TextField label="Date" type="date" value={data.date} onChange={(e) => onChange({ date: e.target.value })} />
         <TextField label="Summary" value={data.summary} onChange={(e) => onChange({ summary: e.target.value })} />

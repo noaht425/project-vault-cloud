@@ -365,7 +365,9 @@ export function MapForm({
           {mode === "draw-trip" && <p className="text-sm text-muted">Tap to trace the actual route you&apos;d travel, then Finish (2+ points).</p>}
           {mode === "place-pin" && !pendingPinPoint && <p className="text-sm text-muted">Tap a spot on the map to place a pin.</p>}
 
-          <div className="relative h-[480px] border border-border rounded-lg overflow-hidden">
+          {/* Taller on desktop — a fixed mobile-sized height left most of a
+              wide monitor's vertical space empty below the map. */}
+          <div className="relative h-[480px] md:h-[70vh] border border-border rounded-lg overflow-hidden">
             <MapCanvas
               imageUrl={imageUrl}
               imageWidth={data.image.width}

@@ -24,7 +24,7 @@ export function NpcForm({
   };
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <div className="grid grid-cols-3 gap-3">
         <TextField label="Role" value={data.role} onChange={(e) => onChange({ role: e.target.value })} />
         <TextField label="CR" value={data.cr} onChange={(e) => onChange({ cr: e.target.value })} />

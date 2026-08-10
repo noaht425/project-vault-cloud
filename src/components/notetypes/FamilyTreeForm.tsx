@@ -125,7 +125,7 @@ export function FamilyTreeForm({
   const warnings = useMemo(() => checkRelationshipPlausibility(edges, ageByTitle), [edges, ageByTitle]);
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <TextField label="Summary" value={data.summary} onChange={(e) => onChange({ summary: e.target.value })} />
 
       {edges.length > 0 && (

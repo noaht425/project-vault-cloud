@@ -35,7 +35,7 @@ export function CalendarForm({
   ];
 
   return (
-    <div className="flex flex-col gap-3 p-4 border-b border-border">
+    <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-3xl md:mx-auto md:w-full">
       <div className="flex flex-wrap gap-1.5">
         {tabs.map((t) => (
           <Button key={t.id} variant={tab === t.id ? "primary" : "default"} className="text-xs" onClick={() => setTab(t.id)}>
