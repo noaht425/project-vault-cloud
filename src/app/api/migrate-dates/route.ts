@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
-import { computeDateMigration, type CalendarCandidate, type CalendarDefinition } from "@/lib/dateMigration";
+import { computeDateMigration, parseCalendarDefinition, type CalendarCandidate } from "@/lib/dateMigration";
 import { dbErrorResponse } from "@/lib/dbError";
 
 interface NoteRow {
@@ -10,21 +10,6 @@ interface NoteRow {
   note_type: string | null;
   frontmatter: Record<string, unknown>;
   version: number;
-}
-
-function asCalendarDefinition(frontmatter: Record<string, unknown>): CalendarDefinition | null {
-  const months = Array.isArray(frontmatter.months) ? frontmatter.months : null;
-  const eras = Array.isArray(frontmatter.eras) ? frontmatter.eras : null;
-  if (!months || !eras) return null;
-  return {
-    months: months.filter(
-      (m): m is { id: string; name: string } => typeof m?.id === "string" && typeof m?.name === "string"
-    ),
-    eras: eras.filter(
-      (e): e is { id: string; abbreviation: string } => typeof e?.id === "string" && typeof e?.abbreviation === "string"
-    ),
-    defaultEraId: typeof frontmatter.defaultEraId === "string" ? frontmatter.defaultEraId : null,
-  };
 }
 
 // Step 5 of the calendar/timeline system (see the Electron app's
@@ -62,7 +47,7 @@ export async function POST(request: Request) {
 
   for (const note of notes as NoteRow[]) {
     if (note.note_type === "calendar") {
-      const definition = asCalendarDefinition(note.frontmatter);
+      const definition = parseCalendarDefinition(note.frontmatter);
       if (definition) calendars.push({ noteTitle: note.name, frontmatter: definition });
     } else if (note.note_type === "event") {
       eventRowsById.set(note.id, note);

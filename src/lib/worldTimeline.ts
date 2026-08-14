@@ -1,12 +1,17 @@
 // Ported from Project Vault's src/common/worldTimeline.ts (separate repo,
 // no shared package) — pulls dated facts out of ANY note's body, not just
 // notes of type "event" — used to build the Events timeline from the whole
-// workspace. Two conventions, which can coexist in the same note:
+// workspace. Three conventions, which can coexist in the same note:
 //
 // 1. A "## History" section (already the dominant pattern across kingdom/
 //    city/NPC notes) with "- <date>: <description>" bullets.
 // 2. Bare "Born: <date>" / "Died: <date>" lines, used by a handful of NPC
 //    notes that don't have a History section.
+// 3. An inline "[[timeline: <date>: <description>]]" mention, anywhere in
+//    the body — lets any note tag a moment on the timeline without a
+//    History section or becoming an Event note. Kept out of the wikilink
+//    regex (src/lib/wikiLinks.ts, PreviewPane.tsx) so it's never mistaken
+//    for a note reference.
 
 export interface WorldTimelineFact {
   date: string;
@@ -17,6 +22,7 @@ const HISTORY_HEADING_RE = /^##\s*History\s*$/im;
 const NEXT_HEADING_RE = /^##/im;
 const HISTORY_BULLET_RE = /^-\s+(.+)$/gim;
 const BORN_DIED_LINE_RE = /^(Born|Died):\s*([^\n]+)$/gim;
+const INLINE_TIMELINE_RE = /\[\[timeline:\s*([^\]]+)\]\]/gi;
 
 function splitBullet(line: string): WorldTimelineFact | null {
   const idx = line.indexOf(": ");
@@ -49,6 +55,15 @@ export function extractBornDiedFacts(body: string): WorldTimelineFact[] {
     const date = (breakIdx === -1 ? rest : rest.slice(0, breakIdx)).replace(/\.$/, "").trim();
     const extra = breakIdx === -1 ? "" : rest.slice(breakIdx + 2).trim();
     facts.push({ date, description: extra ? `${label}: ${extra}` : label });
+  }
+  return facts;
+}
+
+export function extractInlineTimelineFacts(body: string): WorldTimelineFact[] {
+  const facts: WorldTimelineFact[] = [];
+  for (const m of body.matchAll(INLINE_TIMELINE_RE)) {
+    const fact = splitBullet(m[1].trim());
+    if (fact) facts.push(fact);
   }
   return facts;
 }

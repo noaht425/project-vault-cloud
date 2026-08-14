@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractHistoryFacts, extractBornDiedFacts } from "../src/lib/worldTimeline";
+import { extractHistoryFacts, extractBornDiedFacts, extractInlineTimelineFacts } from "../src/lib/worldTimeline";
 
 describe("extractHistoryFacts", () => {
   it("extracts dated bullets under a History heading", () => {
@@ -58,5 +58,36 @@ describe("extractBornDiedFacts", () => {
 
   it("returns an empty array when there are no Born/Died lines", () => {
     expect(extractBornDiedFacts("No dates here.")).toEqual([]);
+  });
+});
+
+describe("extractInlineTimelineFacts", () => {
+  it("extracts a [[timeline: date: description]] mention anywhere in the body", () => {
+    const body = "The bridge held for years until [[timeline: 12 Harvestmoon, 1023 AM: Dragon attacks the village]] changed everything.";
+    expect(extractInlineTimelineFacts(body)).toEqual([
+      { date: "12 Harvestmoon, 1023 AM", description: "Dragon attacks the village" },
+    ]);
+  });
+
+  it("extracts multiple mentions in order", () => {
+    const body = "[[timeline: 1 AM: First]] then later [[timeline: 2 AM: Second]].";
+    expect(extractInlineTimelineFacts(body)).toEqual([
+      { date: "1 AM", description: "First" },
+      { date: "2 AM", description: "Second" },
+    ]);
+  });
+
+  it("is case-insensitive on the timeline keyword", () => {
+    const body = "[[Timeline: 1 AM: event]]";
+    expect(extractInlineTimelineFacts(body)).toEqual([{ date: "1 AM", description: "event" }]);
+  });
+
+  it("ignores a mention without a colon-space split", () => {
+    const body = "[[timeline: no colon here]]";
+    expect(extractInlineTimelineFacts(body)).toEqual([]);
+  });
+
+  it("returns an empty array when there are no timeline mentions", () => {
+    expect(extractInlineTimelineFacts("Just plain text with [[Alice]].")).toEqual([]);
   });
 });

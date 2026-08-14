@@ -85,7 +85,7 @@ function resolveInitialMonthRef(
     if (ref) return ref;
   }
   const latestMinutes = events
-    .filter((e) => e.noteType === "event" && e.structuredDate?.calendarNoteTitle === calendarTitle)
+    .filter((e) => e.structuredDate?.calendarNoteTitle === calendarTitle)
     .map((e) => toCanonicalMinutes(calendar, e.structuredDate!))
     .filter((m): m is number => m !== null)
     .sort((a, b) => b - a)[0];
@@ -189,7 +189,7 @@ export function MonthGridView({ onOpenEvent }: { onOpenEvent: (id: string) => vo
     const window = { start: grid.firstStartMinutes, end: grid.firstStartMinutes + grid.daysInMonth * grid.minutesPerDay };
     const items: { minutes: number; data: EventSummary }[] = [];
     for (const event of events) {
-      if (event.noteType !== "event" || !event.structuredDate) continue;
+      if (!event.structuredDate) continue;
       if (event.structuredDate.calendarNoteTitle !== selectedCalendarTitle) continue;
       if (event.structuredDate.annualRecurrence) {
         for (const minutes of expandAnnualRecurrence(selectedCalendar, event.structuredDate, window)) {
@@ -212,7 +212,7 @@ export function MonthGridView({ onOpenEvent }: { onOpenEvent: (id: string) => vo
 
     const anchorItems: { event: EventSummary; minutes: number }[] = [];
     for (const event of events) {
-      if (event.noteType !== "event" || !event.structuredDate) continue;
+      if (!event.structuredDate) continue;
       const cal = calendarByTitle.get(event.structuredDate.calendarNoteTitle);
       if (!cal) continue;
       const minutes = toCanonicalMinutes(cal, event.structuredDate);

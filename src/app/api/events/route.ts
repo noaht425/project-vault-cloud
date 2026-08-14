@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getAuthedClient } from "@/lib/supabase/apiAuth";
 import { getWorkspaceId } from "@/lib/workspace";
-import { extractHistoryFacts, extractBornDiedFacts } from "@/lib/worldTimeline";
+import { extractHistoryFacts, extractBornDiedFacts, extractInlineTimelineFacts } from "@/lib/worldTimeline";
 import { compareWorldDates } from "@/lib/worldDate";
+import { migrateFreeTextDate, parseCalendarDefinition, type CalendarCandidate } from "@/lib/dateMigration";
 import { dbErrorResponse } from "@/lib/dbError";
 
 interface EventRow {
@@ -47,6 +48,19 @@ export async function GET(request: Request) {
     .eq("workspace_id", workspaceId);
   if (error) return dbErrorResponse(error, "GET /api/events");
 
+  // Calendar notes are already in `notes` above — no second query. Used
+  // below to resolve inline [[timeline: ...]] mentions (worldTimeline.ts's
+  // extractInlineTimelineFacts) to a structuredDate, the same name/
+  // abbreviation matching /api/migrate-dates uses for whole Event notes, so
+  // these mentions can be placed on the pill timeline and month grid too,
+  // not just this flat list.
+  const calendars: CalendarCandidate[] = [];
+  for (const note of notes as EventRow[]) {
+    if (note.note_type !== "calendar") continue;
+    const definition = parseCalendarDefinition(note.frontmatter);
+    if (definition) calendars.push({ noteTitle: note.name, frontmatter: definition });
+  }
+
   const entries: EventSummary[] = [];
   for (const note of notes as EventRow[]) {
     const noteType = note.note_type ?? "note";
@@ -65,6 +79,18 @@ export async function GET(request: Request) {
 
     for (const fact of [...extractHistoryFacts(note.body), ...extractBornDiedFacts(note.body)]) {
       entries.push({ id: note.id, name: note.name, date: fact.date, summary: fact.description, noteType });
+    }
+
+    for (const fact of extractInlineTimelineFacts(note.body)) {
+      const structuredDate = calendars.length > 0 ? migrateFreeTextDate(fact.date, calendars) : null;
+      entries.push({
+        id: note.id,
+        name: note.name,
+        date: fact.date,
+        summary: fact.description,
+        noteType,
+        structuredDate: structuredDate ? { ...structuredDate, annualRecurrence: false } : undefined,
+      });
     }
   }
 

@@ -33,4 +33,12 @@ describe("extractWikiLinkTitles", () => {
   it("skips an empty [[]] rather than emitting a blank title", () => {
     expect(extractWikiLinkTitles("[[]] and [[Alice]]")).toEqual(["Alice"]);
   });
+
+  it("skips a [[timeline: ...]] mention rather than treating it as a link title", () => {
+    expect(extractWikiLinkTitles("[[timeline: 12 Aucaela, 400 AM: Founding]] and [[Alice]]")).toEqual(["Alice"]);
+  });
+
+  it("is case-insensitive when skipping the timeline marker", () => {
+    expect(extractWikiLinkTitles("[[Timeline: 1 AM: event]]")).toEqual([]);
+  });
 });

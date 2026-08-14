@@ -30,6 +30,25 @@ export interface CalendarCandidate {
   frontmatter: CalendarDefinition;
 }
 
+// Duck-typed parse of a calendar note's raw frontmatter into a
+// CalendarDefinition — shared by /api/migrate-dates and /api/events so both
+// routes' free-text-date resolution agree on what counts as a usable
+// calendar note.
+export function parseCalendarDefinition(frontmatter: Record<string, unknown>): CalendarDefinition | null {
+  const months = Array.isArray(frontmatter.months) ? frontmatter.months : null;
+  const eras = Array.isArray(frontmatter.eras) ? frontmatter.eras : null;
+  if (!months || !eras) return null;
+  return {
+    months: months.filter(
+      (m): m is { id: string; name: string } => typeof m?.id === "string" && typeof m?.name === "string"
+    ),
+    eras: eras.filter(
+      (e): e is { id: string; abbreviation: string } => typeof e?.id === "string" && typeof e?.abbreviation === "string"
+    ),
+    defaultEraId: typeof frontmatter.defaultEraId === "string" ? frontmatter.defaultEraId : null,
+  };
+}
+
 export interface EventStructuredDate {
   calendarNoteTitle: string;
   eraId: string;

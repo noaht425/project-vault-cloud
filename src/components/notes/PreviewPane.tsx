@@ -6,7 +6,11 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
 
-const WIKI_LINK_RE = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+// Excludes [[timeline: ...]] mentions (see src/lib/worldTimeline.ts) via a
+// negative lookahead — those are a distinct marker, rendered separately
+// below, not a note reference.
+const WIKI_LINK_RE = /\[\[(?!\s*timeline\s*:)([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/gi;
+const INLINE_TIMELINE_RE = /\[\[timeline:\s*([^\]]+)\]\]/gi;
 
 // Ported from the Electron app's PreviewPane.tsx — rewrites [[Title]] /
 // [[Title|Alias]] into ordinary markdown links pointing at a "wikilink:"
@@ -20,6 +24,19 @@ function convertWikiLinksToMarkdown(content: string): string {
   });
 }
 
+// Renders [[timeline: <date>: <description>]] as plain styled text — no
+// note to link to, just a visual marker that this line is on the timeline
+// (see /api/events, which extracts the same syntax server-side).
+function convertInlineTimelineToMarkdown(content: string): string {
+  return content.replace(INLINE_TIMELINE_RE, (match, inner: string) => {
+    const idx = inner.indexOf(": ");
+    if (idx === -1) return match;
+    const date = inner.slice(0, idx).trim();
+    const description = inner.slice(idx + 2).trim();
+    return `**📅 ${date}:** ${description}`;
+  });
+}
+
 function extractWikiLinkTitles(content: string): string[] {
   const titles = new Set<string>();
   for (const match of content.matchAll(WIKI_LINK_RE)) {
@@ -30,7 +47,7 @@ function extractWikiLinkTitles(content: string): string[] {
 
 export function PreviewPane({ body }: { body: string }) {
   const router = useRouter();
-  const markdown = convertWikiLinksToMarkdown(body);
+  const markdown = convertWikiLinksToMarkdown(convertInlineTimelineToMarkdown(body));
   // title -> resolved note id, or null once confirmed not found. Absent
   // from the map while still resolving — that in-between state renders the
   // same inert way as "not found" (see the `a` override below) so there's

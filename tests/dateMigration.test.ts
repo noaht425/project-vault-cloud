@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { migrateFreeTextDate, computeDateMigration, type CalendarCandidate } from "../src/lib/dateMigration";
+import { migrateFreeTextDate, computeDateMigration, parseCalendarDefinition, type CalendarCandidate } from "../src/lib/dateMigration";
 
 function mainCalendar(): CalendarCandidate {
   return {
@@ -85,5 +85,34 @@ describe("computeDateMigration", () => {
 
   it("is a no-op with no calendars defined", () => {
     expect(computeDateMigration([{ id: "a", date: "15 Aucaela, 42 AM", hasStructuredDate: false }], [])).toEqual([]);
+  });
+});
+
+describe("parseCalendarDefinition", () => {
+  it("parses a valid calendar note frontmatter into months/eras/defaultEraId", () => {
+    const result = parseCalendarDefinition({
+      months: [{ id: "aucaela", name: "Aucaela" }],
+      eras: [{ id: "am", abbreviation: "AM" }],
+      defaultEraId: "am",
+    });
+    expect(result).toEqual({
+      months: [{ id: "aucaela", name: "Aucaela" }],
+      eras: [{ id: "am", abbreviation: "AM" }],
+      defaultEraId: "am",
+    });
+  });
+
+  it("filters out malformed month/era entries instead of throwing", () => {
+    const result = parseCalendarDefinition({
+      months: [{ id: "aucaela", name: "Aucaela" }, { id: 5, name: "Bad" }, "not an object"],
+      eras: [{ id: "am", abbreviation: "AM" }, {}],
+    });
+    expect(result).toEqual({ months: [{ id: "aucaela", name: "Aucaela" }], eras: [{ id: "am", abbreviation: "AM" }], defaultEraId: null });
+  });
+
+  it("returns null when months or eras are missing", () => {
+    expect(parseCalendarDefinition({ eras: [] })).toBeNull();
+    expect(parseCalendarDefinition({ months: [] })).toBeNull();
+    expect(parseCalendarDefinition({})).toBeNull();
   });
 });
