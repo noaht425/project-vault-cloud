@@ -10,7 +10,7 @@ export function Breadcrumbs({ folderId }: { folderId: string | null }) {
 
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 text-sm text-muted overflow-x-auto whitespace-nowrap border-b border-border">
-      <Link href="/" className="hover:text-normal shrink-0">
+      <Link href="/vault" className="hover:text-normal shrink-0">
         Vault
       </Link>
       {path.map((node, i) => (

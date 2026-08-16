@@ -106,8 +106,8 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex md:flex-col md:w-64 shrink-0 border-r border-border bg-sidebar overflow-y-auto p-2">
       <Link
-        href="/"
-        className={`block truncate px-2 py-1.5 rounded text-sm font-serif hover:bg-hover ${pathname === "/" ? "bg-active" : ""}`}
+        href="/vault"
+        className={`block truncate px-2 py-1.5 rounded text-sm font-serif hover:bg-hover ${pathname === "/vault" ? "bg-active" : ""}`}
       >
         Vault
       </Link>

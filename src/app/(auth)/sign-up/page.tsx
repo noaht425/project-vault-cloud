@@ -31,7 +31,7 @@ export default function SignUpPage() {
     if (data.session) {
       // Confirmation is off for this project — signUp already returned a
       // real session, same as sign-in would have.
-      router.push("/");
+      router.push("/vault");
       router.refresh();
       return;
     }

@@ -25,7 +25,7 @@ export default function SignInPage() {
     // router.refresh() forces the (app) Server Component layout to re-read
     // the now-set session cookie — without it, Next can serve a cached
     // render from before sign-in and bounce straight back to /sign-in.
-    router.push("/");
+    router.push("/vault");
     router.refresh();
   };
 
