@@ -61,7 +61,7 @@ export default async function LandingPage() {
         <section className="max-w-2xl w-full text-center py-12 sm:py-20">
           <h1 className="font-serif text-3xl sm:text-4xl leading-tight">Your campaign, all in one place.</h1>
           <p className="text-muted mt-4 text-base sm:text-lg">
-            A D&apos;D campaign notes workspace — browse, read, and edit your world from any device, at the table or
+            A D&amp;D campaign notes workspace — browse, read, and edit your world from any device, at the table or
             on the couch.
           </p>
           <div className="flex items-center justify-center gap-3 mt-8">
