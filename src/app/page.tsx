@@ -22,7 +22,8 @@ const FEATURES: { title: string; description: string }[] = [
   },
   {
     title: "Custom calendars",
-    description: "Track in-world dates across your own calendar systems, with a scaled timeline of everything that's happened.",
+    description:
+      "Track in-world dates across your own calendar systems, with a scaled timeline of everything that's happened — and weather generated per day from each region's climate.",
   },
   {
     title: "Dice & initiative",
