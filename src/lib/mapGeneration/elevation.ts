@@ -8,7 +8,7 @@ import type { MapLandmass, MapZone } from '../noteTypes/map'
 import { fractalNoise2D } from './noise'
 import { polygonArea, signedPolygonArea, smoothPolygon, traceRegionBoundaries } from './contour'
 
-export interface TerrainGenerationParams {
+export interface ElevationGridParams {
   seed: number
   widthPixels: number
   heightPixels: number
@@ -24,14 +24,80 @@ export interface TerrainGenerationParams {
   // count (noise doesn't naturally produce an exact count without
   // clustering heuristics this doesn't attempt). Default 0.35.
   landmassScale?: number
-  // 0-1 elevation threshold — cells at or above this are land. Higher
-  // means more ocean. Default 0.5.
-  seaLevel?: number
   // 0-1 — how much of already-high land becomes mountainous. Default 0.35.
   mountainDensity?: number
   // 0-1 — amplitude of the extra ridged noise layer that carves mountain
   // ranges into already-high land. Default 0.5.
   mountainRuggedness?: number
+}
+
+export interface ElevationGrid {
+  // [row][col] — NOT clamped to exactly [0,1] (base + a scaled ridge layer
+  // can run slightly over 1 at extreme param values); every threshold
+  // compared against it (seaLevel, MOUNTAIN_ELEVATION_THRESHOLD, a future
+  // climate module's own bands) uses this same raw scale consistently, so
+  // the lack of clamping never matters in practice.
+  values: number[][]
+  cols: number
+  rows: number
+  pixelsPerCellX: number
+  pixelsPerCellY: number
+}
+
+// Elevation band over which the ridged mountain layer fades in — below
+// HIGHLAND_START it contributes nothing (no peaks springing up in open
+// ocean or on low plains), between the two bounds it ramps up linearly,
+// at/above HIGHLAND_END it's fully present.
+const HIGHLAND_START = 0.55
+const HIGHLAND_END = 0.85
+
+function smoothstepBetween(edge0: number, edge1: number, x: number): number {
+  if (edge0 === edge1) return x < edge0 ? 0 : 1
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
+  return t * t * (3 - 2 * t)
+}
+
+// Builds the raw elevation field noise-based generation starts from —
+// factored out of generateTerrain so hydrology.ts and climate.ts can build
+// the EXACT same field (same seed + same params always reproduces it
+// identically, being a pure function) rather than each independently
+// re-deriving a subtly different one. Deliberately never persisted
+// anywhere — see the procedural map generation plan's core design
+// decision #1 — every caller recomputes it fresh from params each time.
+export function computeElevationGrid(params: ElevationGridParams): ElevationGrid {
+  const { seed, widthPixels, heightPixels, gridResolution = 48, landmassScale = 0.35, mountainDensity = 0.35, mountainRuggedness = 0.5 } = params
+
+  const longerDimension = Math.max(widthPixels, heightPixels, 1)
+  const cols = Math.max(4, Math.round((widthPixels / longerDimension) * gridResolution))
+  const rows = Math.max(4, Math.round((heightPixels / longerDimension) * gridResolution))
+  const pixelsPerCellX = widthPixels / cols
+  const pixelsPerCellY = heightPixels / rows
+
+  // Base continent shape (low frequency) plus a higher-frequency ridged
+  // layer, the latter only contributing on already-elevated land (see
+  // smoothstepBetween/HIGHLAND_*) so mountains read as "ranges carved into
+  // highlands" rather than isolated spikes anywhere elevation happens to
+  // roll high.
+  const featureScale = Math.max(1, gridResolution * landmassScale)
+  const values: number[][] = []
+  for (let y = 0; y < rows; y++) {
+    const row: number[] = []
+    for (let x = 0; x < cols; x++) {
+      const base = fractalNoise2D(seed, x, y, { scale: featureScale, octaves: 5 })
+      const ridge = fractalNoise2D(seed + 7919, x, y, { scale: featureScale * 0.25, octaves: 4 })
+      const highlandFactor = smoothstepBetween(HIGHLAND_START, HIGHLAND_END, base)
+      row.push(base + ridge * mountainRuggedness * mountainDensity * highlandFactor)
+    }
+    values.push(row)
+  }
+
+  return { values, cols, rows, pixelsPerCellX, pixelsPerCellY }
+}
+
+export interface TerrainGenerationParams extends ElevationGridParams {
+  // 0-1 elevation threshold — cells at or above this are land. Higher
+  // means more ocean. Default 0.5.
+  seaLevel?: number
   // Which terrainTypes entry generated mountain zones should reference —
   // the map's own terrainTypes array isn't this module's concern (it's
   // pure elevation math, no note-schema awareness beyond the output
@@ -65,56 +131,10 @@ export interface TerrainGenerationResult {
 const MIN_LANDMASS_AREA_FRACTION = 0.002
 const MIN_MOUNTAIN_AREA_FRACTION = MIN_LANDMASS_AREA_FRACTION
 const MOUNTAIN_ELEVATION_THRESHOLD = 0.8
-// Elevation band over which the ridged mountain layer fades in — below
-// HIGHLAND_START it contributes nothing (no peaks springing up in open
-// ocean or on low plains), between the two bounds it ramps up linearly,
-// at/above HIGHLAND_END it's fully present.
-const HIGHLAND_START = 0.55
-const HIGHLAND_END = 0.85
-
-function smoothstepBetween(edge0: number, edge1: number, x: number): number {
-  if (edge0 === edge1) return x < edge0 ? 0 : 1
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
-  return t * t * (3 - 2 * t)
-}
 
 export function generateTerrain(params: TerrainGenerationParams, idFactory: () => string = () => crypto.randomUUID()): TerrainGenerationResult {
-  const {
-    seed,
-    widthPixels,
-    heightPixels,
-    gridResolution = 48,
-    landmassScale = 0.35,
-    seaLevel = 0.5,
-    mountainDensity = 0.35,
-    mountainRuggedness = 0.5,
-    mountainTerrainTypeId = 'mountains',
-    boundaryMask = null
-  } = params
-
-  const longerDimension = Math.max(widthPixels, heightPixels, 1)
-  const cols = Math.max(4, Math.round((widthPixels / longerDimension) * gridResolution))
-  const rows = Math.max(4, Math.round((heightPixels / longerDimension) * gridResolution))
-  const pixelsPerCellX = widthPixels / cols
-  const pixelsPerCellY = heightPixels / rows
-
-  // Base continent shape (low frequency) plus a higher-frequency ridged
-  // layer, the latter only contributing on already-elevated land (see
-  // smoothstepBetween/HIGHLAND_*) so mountains read as "ranges carved into
-  // highlands" rather than isolated spikes anywhere elevation happens to
-  // roll high.
-  const featureScale = Math.max(1, gridResolution * landmassScale)
-  const elevation: number[][] = []
-  for (let y = 0; y < rows; y++) {
-    const row: number[] = []
-    for (let x = 0; x < cols; x++) {
-      const base = fractalNoise2D(seed, x, y, { scale: featureScale, octaves: 5 })
-      const ridge = fractalNoise2D(seed + 7919, x, y, { scale: featureScale * 0.25, octaves: 4 })
-      const highlandFactor = smoothstepBetween(HIGHLAND_START, HIGHLAND_END, base)
-      row.push(base + ridge * mountainRuggedness * mountainDensity * highlandFactor)
-    }
-    elevation.push(row)
-  }
+  const { widthPixels, heightPixels, seaLevel = 0.5, mountainTerrainTypeId = 'mountains', boundaryMask = null } = params
+  const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
 
   const hasMask = boundaryMask !== null && boundaryMask.length >= 3
   const insideMask = (x: number, y: number): boolean => {
