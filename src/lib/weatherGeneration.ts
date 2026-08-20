@@ -2,14 +2,11 @@
 import type { CalendarFrontmatter } from "./noteTypes/calendar";
 import type { ClimateFrontmatter, WeatherCondition } from "./noteTypes/climate";
 import { fromCanonicalMinutes } from "./calendarMath";
+import { deterministicFraction } from "./rng";
 
-export function deterministicFraction(seed: number): number {
-  let x = seed | 0;
-  x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
-  x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
-  x = (x ^ (x >>> 16)) >>> 0;
-  return x / 4294967296;
-}
+// Re-exported for backward compatibility — this used to be defined here;
+// it now lives in rng.ts since the map generation system needs it too.
+export { deterministicFraction };
 
 export function pickWeightedCondition<T extends { weight: number }>(items: T[], fraction: number): T | null {
   const total = items.reduce((sum, item) => sum + Math.max(0, item.weight), 0);

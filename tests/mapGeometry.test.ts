@@ -161,10 +161,10 @@ describe('splitLineByZones with landmasses', () => {
 // A single horizontal segment 200px long, 20px wide — corridor spans
 // y=[40,60] across x=[0,200] (see zonesIncludingLines's describe block for
 // the geometry check that confirms this).
-const ROAD_LINE: MapLine = { id: 'line-road', lineTypeId: 'road', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }], widthPixels: 20 }
+const ROAD_LINE: MapLine = { id: 'line-road', lineTypeId: 'road', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }], widthPixels: 20, generated: false }
 // A single vertical segment 200px long, 10px wide — corridor spans
 // x=[95,105] across y=[0,200].
-const RIVER_LINE: MapLine = { id: 'line-river', lineTypeId: 'river', points: [{ x: 100, y: 0 }, { x: 100, y: 200 }], widthPixels: 10 }
+const RIVER_LINE: MapLine = { id: 'line-river', lineTypeId: 'river', points: [{ x: 100, y: 0 }, { x: 100, y: 200 }], widthPixels: 10, generated: false }
 
 describe('zonesIncludingLines', () => {
   it('turns a line into a thin corridor polygon that a crossing route registers as passing through', () => {
@@ -590,7 +590,8 @@ describe('mergeTripResults', () => {
         { x: 100, y: -50 },
         { x: 100, y: 150 }
       ],
-      widthPixels: 10
+      widthPixels: 10,
+      generated: false
     }
     const blocked = calculateTrip(
       [{ x: 90, y: 50 }, { x: 110, y: 50 }],

@@ -56,7 +56,13 @@ export const mapLineSchema = z.object({
   points: z.array(pointSchema),
   // How wide a corridor around this line counts as "on/crossing it", in map
   // image pixels — judge it by eye against the map's own detail level.
-  widthPixels: z.coerce.number().catch(20)
+  widthPixels: z.coerce.number().catch(20),
+  // True for a line placed by the map generator rather than hand-drawn —
+  // lets a "regenerate roads/rivers" action clear only what it created
+  // itself, never touching anything the user drew. Absent/false for every
+  // line that predates generation, which is exactly right: nothing old was
+  // generated. See docs/plans's procedural map generation plan, Phase 0.
+  generated: z.boolean().catch(false)
 })
 
 // A landmass has no terrain/speed of its own — it's a pure land/water
@@ -87,12 +93,80 @@ export const mapPinSchema = z.object({
   // Display text for a freehand pin (locationTitle === null) — unused/empty
   // when locationTitle is set, since the linked note's own title is shown
   // instead. See pinDisplayLabel() below.
-  label: z.string().catch('')
+  label: z.string().catch(''),
+  // Same "machine-placed, not hand-drawn" tag as mapLineSchema.generated —
+  // a generated settlement pin starts out freehand (locationTitle: null,
+  // label: the generated city's name) and stays tagged generated:true even
+  // after being linked to a real Settlement note via "Generate settlement
+  // from pin", so it's still distinguishable from a pin the user placed
+  // themselves and later linked by hand.
+  generated: z.boolean().catch(false)
 })
 
 export function pinDisplayLabel(pin: { locationTitle: string | null; label: string }): string {
   return pin.locationTitle ?? pin.label
 }
+
+// A biome/climate label (e.g. "Tundra", "Rainforest") — deliberately no
+// speedMultiplier, unlike terrainTypeSchema: climate is a descriptive
+// overlay, not a travel-cost surface. A tile's actual travel speed still
+// comes entirely from the existing terrain zones/lines, so painting a
+// climate zone can never silently change trip-calculator results.
+export const climateTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: z.string().catch('#7c9c6b')
+})
+
+export const climateZoneSchema = z.object({
+  id: z.string(),
+  climateTypeId: z.string(),
+  // Same single-ring-polygon shape as mapZoneSchema (v1).
+  points: z.array(pointSchema),
+  // See mapLineSchema.generated — this layer only ever has generated zones
+  // in practice (there's no manual "paint a climate zone" tool as of Phase
+  // 0), but the flag is included from the start for consistency with every
+  // other generated-content array, rather than added later once a manual
+  // painting tool exists.
+  generated: z.boolean().catch(false)
+})
+
+// A civilization/nation's land claim — deliberately references an existing
+// settlement-preset note by title (presetNoteTitle) rather than embedding
+// its own race/wealth/religion config, so a map "civilization" is just "a
+// name, a shape, and which settlement-preset note its cities should be
+// generated from" (see settlementPreset.ts) instead of a second, parallel
+// preset schema to keep in sync with the real one.
+export const territorySchema = z.object({
+  id: z.string(),
+  name: z.string().catch(''),
+  points: z.array(pointSchema),
+  presetNoteTitle: z.string().nullable().catch(null),
+  // References a mapPinSchema.id on this same map, not a note — the capital
+  // is just which of this territory's own pins is the seat of power, same
+  // reasoning as capitalPinId not being a wiki-link.
+  capitalPinId: z.string().nullable().catch(null),
+  generated: z.boolean().catch(false)
+})
+
+// One map's generation history: the seed and inputs that would reproduce
+// its generated content, plus (for a map drilled down from another) which
+// parent map and which region of it this one zooms into. Deliberately kept
+// as loosely-typed passthrough params rather than a fully-specified schema
+// here in Phase 0 — the actual terrain/hydrology/climate/civilization input
+// fields get defined phase-by-phase (see the procedural map generation
+// plan) and would otherwise need this schema rewritten every phase. A null
+// generation means exactly what it does today: a map nobody has ever run
+// generation on, including every existing hand-drawn map.
+export const generationConfigSchema = z.object({
+  seed: z.number(),
+  params: z.record(z.string(), z.unknown()).catch({}),
+  parentMapTitle: z.string().nullable().catch(null),
+  parentBounds: z
+    .object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() })
+    .nullable()
+    .catch(null)
+})
 
 export const mapFrontmatterSchema = z
   .object({
@@ -100,12 +174,29 @@ export const mapFrontmatterSchema = z
     tags: z.array(z.string()).catch([]),
     summary: z.string().catch(''),
     image: mapImageSchema.nullable().catch(null),
+    // Working canvas dimensions independent of any uploaded raster — lets a
+    // purely-generated map exist with no image at all. When image is set,
+    // it remains the source of truth for dimensions (unchanged behavior);
+    // canvasSize is what a generated-only map falls back to instead. See
+    // MapForm's dimension-resolution logic.
+    canvasSize: z.object({ width: z.number(), height: z.number() }).nullable().catch(null),
     scale: mapScaleSchema.nullable().catch(null),
     terrainTypes: z.array(terrainTypeSchema).catch([]),
     lineTypes: z.array(lineTypeSchema).catch([]),
     zones: z.array(mapZoneSchema).catch([]),
     lines: z.array(mapLineSchema).catch([]),
     landmasses: z.array(mapLandmassSchema).catch([]),
+    // Climate/biome overlay — see climateTypeSchema/climateZoneSchema above.
+    // Empty on every map today; Phase 2 of the map generation plan is what
+    // actually populates these.
+    climateTypes: z.array(climateTypeSchema).catch([]),
+    climateZones: z.array(climateZoneSchema).catch([]),
+    // Civilization/nation land claims — see territorySchema above. Empty on
+    // every map today; Phase 3 populates these.
+    territories: z.array(territorySchema).catch([]),
+    // This map's own generation history, if any — see generationConfigSchema
+    // above. Null for every hand-drawn map, including all pre-existing ones.
+    generation: generationConfigSchema.nullable().catch(null),
     // Which terrainTypes entry represents "water" — used as the default
     // speed for anything outside every landmass and not otherwise covered
     // by a painted zone/line. Null until the user sets one (see MapSheet's
@@ -173,6 +264,10 @@ export type MapZone = z.infer<typeof mapZoneSchema>
 export type MapLine = z.infer<typeof mapLineSchema>
 export type MapLandmass = z.infer<typeof mapLandmassSchema>
 export type MapPin = z.infer<typeof mapPinSchema>
+export type ClimateType = z.infer<typeof climateTypeSchema>
+export type ClimateZone = z.infer<typeof climateZoneSchema>
+export type Territory = z.infer<typeof territorySchema>
+export type GenerationConfig = z.infer<typeof generationConfigSchema>
 
 // Seeded on every new map — generic real-world-ish starting points, not
 // tied to any specific published ruleset (same spirit as

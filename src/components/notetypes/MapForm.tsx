@@ -198,7 +198,7 @@ export function MapForm({
     if (!Number.isFinite(widthPixels) || widthPixels <= 0) return;
     const lineType = resolveType(data.lineTypes);
     if (!lineType) return;
-    const line: MapLine = { id: crypto.randomUUID(), lineTypeId: lineType.id, points: pendingLinePoints, widthPixels };
+    const line: MapLine = { id: crypto.randomUUID(), lineTypeId: lineType.id, points: pendingLinePoints, widthPixels, generated: false };
     const isNewLineType = terrainChoice === "__new__";
     updateFrontmatter(isNewLineType ? { lineTypes: [...data.lineTypes, lineType], lines: [...data.lines, line] } : { lines: [...data.lines, line] });
     setPendingLinePoints(null);
@@ -264,12 +264,29 @@ export function MapForm({
   const terrainNameById = new Map(data.terrainTypes.map((t) => [t.id, t.name]));
   const lineTypeNameById = new Map(data.lineTypes.map((t) => [t.id, t.name]));
 
+  // Working canvas dimensions, independent of whether there's an uploaded
+  // raster: an uploaded image is still the source of truth for size when
+  // present (unchanged behavior), but a purely-generated map with no image
+  // falls back to canvasSize instead — see map.ts's canvasSize field.
+  const workingDims = data.image ? { width: data.image.width, height: data.image.height } : data.canvasSize;
+  // True once there's something to actually draw a canvas over: an image
+  // that's finished loading its signed URL, or a generated-only canvas size
+  // (which needs no async load at all).
+  const canvasReady = workingDims !== null && (!data.image || imageUrl !== null);
+
   const derivedScale =
-    data.scaleMode === "latitude" && data.topLatitude !== null && data.bottomLatitude !== null && data.planetCircumference && data.image
-      ? deriveScaleFromLatitudeSpan(data.topLatitude, data.bottomLatitude, data.planetCircumference, data.image.height, data.latitudeUnit)
+    data.scaleMode === "latitude" && data.topLatitude !== null && data.bottomLatitude !== null && data.planetCircumference && workingDims
+      ? deriveScaleFromLatitudeSpan(data.topLatitude, data.bottomLatitude, data.planetCircumference, workingDims.height, data.latitudeUnit)
       : null;
-  const derivedEquatorY = data.scaleMode === "latitude" && data.topLatitude !== null && data.bottomLatitude !== null ? deriveEquatorY(data.topLatitude, data.bottomLatitude, data.image?.height ?? 0) : null;
+  const derivedEquatorY = data.scaleMode === "latitude" && data.topLatitude !== null && data.bottomLatitude !== null ? deriveEquatorY(data.topLatitude, data.bottomLatitude, workingDims?.height ?? 0) : null;
   const effectiveScale = data.scaleMode === "latitude" ? derivedScale : data.scale;
+
+  const [showLandmasses, setShowLandmasses] = useState(true);
+  const [showZones, setShowZones] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showPins, setShowPins] = useState(true);
+  const [canvasWidthInput, setCanvasWidthInput] = useState("1000");
+  const [canvasHeightInput, setCanvasHeightInput] = useState("1000");
 
   return (
     <div className="flex flex-col gap-3 p-4 border-b border-border md:max-w-5xl md:mx-auto md:w-full">
@@ -283,7 +300,31 @@ export function MapForm({
         {uploadError && <span className="text-sm text-danger">{uploadError}</span>}
       </div>
 
-      {data.image && imageUrl && (
+      {/* A map doesn't need an uploaded raster at all — this is the entry
+          point for a purely-generated map (see the procedural map generation
+          plan). Only offered while there's neither an image nor a canvas
+          size yet; once canvasSize is set, the rest of the editor treats it
+          exactly like an image-backed map (see workingDims/canvasReady). */}
+      {!data.image && !data.canvasSize && (
+        <div className="flex flex-wrap items-end gap-2">
+          <TextField label="Width (px)" type="number" className="w-28" value={canvasWidthInput} onChange={(e) => setCanvasWidthInput(e.target.value)} />
+          <TextField label="Height (px)" type="number" className="w-28" value={canvasHeightInput} onChange={(e) => setCanvasHeightInput(e.target.value)} />
+          <Button
+            onClick={() => {
+              const width = Number(canvasWidthInput);
+              const height = Number(canvasHeightInput);
+              if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+                updateFrontmatter({ canvasSize: { width, height } });
+              }
+            }}
+          >
+            Start blank map (no image)
+          </Button>
+          <p className="text-sm text-muted basis-full">For a map you&apos;ll fill in with the generator instead of an uploaded image.</p>
+        </div>
+      )}
+
+      {canvasReady && workingDims && (
         <>
           <div className="flex flex-wrap gap-1.5">
             {MODE_LABELS.filter((m) => m.id !== "calibrate" || data.scaleMode === "manual").map((m) => (
@@ -365,13 +406,32 @@ export function MapForm({
           {mode === "draw-trip" && <p className="text-sm text-muted">Tap to trace the actual route you&apos;d travel, then Finish (2+ points).</p>}
           {mode === "place-pin" && !pendingPinPoint && <p className="text-sm text-muted">Tap a spot on the map to place a pin.</p>}
 
+          <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={showLandmasses} onChange={(e) => setShowLandmasses(e.target.checked)} />
+              Landmasses
+            </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} />
+              Terrain
+            </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} />
+              Lines
+            </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={showPins} onChange={(e) => setShowPins(e.target.checked)} />
+              Pins
+            </label>
+          </div>
+
           {/* Taller on desktop — a fixed mobile-sized height left most of a
               wide monitor's vertical space empty below the map. */}
           <div className="relative h-[480px] md:h-[70vh] border border-border rounded-lg overflow-hidden">
             <MapCanvas
-              imageUrl={imageUrl}
-              imageWidth={data.image.width}
-              imageHeight={data.image.height}
+              imageUrl={imageUrl ?? undefined}
+              imageWidth={workingDims.width}
+              imageHeight={workingDims.height}
               zones={data.zones}
               lines={data.lines}
               landmasses={data.landmasses}
@@ -386,8 +446,8 @@ export function MapForm({
               onTripDrawn={(points) => {
                 setDrawnTripPath(points);
                 const legs =
-                  data.image && (data.wrapsHorizontally || data.wrapsVertically)
-                    ? foldDrawnPathAtWraps(points, { mapWidth: data.image.width, mapHeight: data.image.height, wrapsHorizontally: data.wrapsHorizontally, wrapsVertically: data.wrapsVertically })
+                  data.wrapsHorizontally || data.wrapsVertically
+                    ? foldDrawnPathAtWraps(points, { mapWidth: workingDims.width, mapHeight: workingDims.height, wrapsHorizontally: data.wrapsHorizontally, wrapsVertically: data.wrapsVertically })
                     : [points];
                 setTripOverlayPath(legs);
                 setMode("view");
@@ -403,6 +463,10 @@ export function MapForm({
               equatorY={derivedEquatorY}
               wrapsHorizontally={data.wrapsHorizontally}
               wrapsVertically={data.wrapsVertically}
+              showLandmasses={showLandmasses}
+              showZones={showZones}
+              showLines={showLines}
+              showPins={showPins}
             />
           </div>
 
@@ -665,7 +729,7 @@ export function MapForm({
             landmasses={data.landmasses}
             waterTerrainTypeId={data.waterTerrainTypeId}
             scale={effectiveScale}
-            image={data.image}
+            image={workingDims}
             wrapsHorizontally={data.wrapsHorizontally}
             wrapsVertically={data.wrapsVertically}
             equatorY={derivedEquatorY}

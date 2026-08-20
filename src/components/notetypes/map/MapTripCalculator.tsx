@@ -9,7 +9,7 @@ import {
   type LatitudeDistortionConfig,
   type Point,
 } from "@/lib/mapGeometry";
-import { pinDisplayLabel, type LineType, type MapImage, type MapLandmass, type MapLine, type MapPin, type MapScale, type MapZone, type TerrainType } from "@/lib/noteTypes/map";
+import { pinDisplayLabel, type LineType, type MapLandmass, type MapLine, type MapPin, type MapScale, type MapZone, type TerrainType } from "@/lib/noteTypes/map";
 import type { TravelMode } from "@/lib/noteTypes/travelModes";
 import { SelectField } from "@/components/ui/SelectField";
 import { Button } from "@/components/ui/Button";
@@ -47,7 +47,10 @@ export function MapTripCalculator({
   landmasses: MapLandmass[];
   waterTerrainTypeId: string | null;
   scale: MapScale | null;
-  image: MapImage | null;
+  // Only width/height are ever read here (wrap-around geometry) — accepting
+  // just that shape instead of a full MapImage lets this work equally for a
+  // purely-generated map (canvasSize) with no uploaded raster at all.
+  image: { width: number; height: number } | null;
   wrapsHorizontally: boolean;
   wrapsVertically: boolean;
   equatorY: number | null;
