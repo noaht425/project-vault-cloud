@@ -38,7 +38,14 @@ export const mapZoneSchema = z.object({
   id: z.string(),
   terrainTypeId: z.string(),
   // Simple single-ring polygon — no holes, no multi-part regions (v1).
-  points: z.array(pointSchema)
+  points: z.array(pointSchema),
+  // Same "machine-placed, not hand-drawn" tag as mapLineSchema.generated —
+  // added a beat later than lines/pins (Phase 0 only covered the layers
+  // that existed as generation *targets* yet; Phase 1's terrain generator
+  // is what starts actually producing zones, so this needed to land before
+  // that could ship non-destructively). See the map generation plan's
+  // Phase 5 (non-destructive augment mode) for why this matters.
+  generated: z.boolean().catch(false)
 })
 
 // Same shape as a terrain type, kept as a separate name/pool since lines
@@ -77,7 +84,8 @@ export const mapLandmassSchema = z.object({
   id: z.string(),
   name: z.string().catch(''),
   // Simple single-ring polygon, same shape/limitations as a MapZone (v1).
-  points: z.array(pointSchema)
+  points: z.array(pointSchema),
+  generated: z.boolean().catch(false)
 })
 
 export const mapPinSchema = z.object({

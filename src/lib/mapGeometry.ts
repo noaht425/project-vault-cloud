@@ -283,7 +283,8 @@ function lineToCorridorZones(line: MapLine): MapZone[] {
         { x: b.x + nx, y: b.y + ny },
         { x: b.x - nx, y: b.y - ny },
         { x: a.x - nx, y: a.y - ny }
-      ]
+      ],
+      generated: false
     })
     // Adjacent segment corridors aren't joined/mitered at the seam — a v1
     // simplification. A route crossing exactly at a sharp joint could miss

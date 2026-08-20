@@ -34,7 +34,8 @@ const FOREST: MapZone = {
     { x: 100, y: 0 },
     { x: 100, y: 100 },
     { x: 0, y: 100 }
-  ]
+  ],
+  generated: false
 }
 const MEADOW: MapZone = {
   id: 'zone-meadow',
@@ -44,7 +45,8 @@ const MEADOW: MapZone = {
     { x: 200, y: 0 },
     { x: 200, y: 100 },
     { x: 100, y: 100 }
-  ]
+  ],
+  generated: false
 }
 const ZONES = [FOREST, MEADOW]
 
@@ -123,7 +125,8 @@ const CONTINENT: MapLandmass = {
     { x: 100, y: 0 },
     { x: 100, y: 100 },
     { x: 0, y: 100 }
-  ]
+  ],
+  generated: false
 }
 
 describe('isLandAt', () => {
@@ -381,7 +384,8 @@ describe('calculateTrip', () => {
         { x: 260, y: 0 },
         { x: 260, y: 100 },
         { x: 180, y: 100 }
-      ]
+      ],
+      generated: false
     }
     const path = [
       { x: 50, y: 50 }, // inside CONTINENT

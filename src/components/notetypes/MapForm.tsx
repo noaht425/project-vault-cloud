@@ -9,6 +9,7 @@ import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
 import { TextField } from "@/components/ui/TextField";
 import { Button } from "@/components/ui/Button";
 import { MapCanvas, type MapCanvasMode } from "./map/MapCanvas";
+import { MapGenerationPanel } from "./map/MapGenerationPanel";
 import { MapTripCalculator } from "./map/MapTripCalculator";
 import { MapTimeline } from "./map/MapTimeline";
 import { useTravelModes } from "./map/useTravelModes";
@@ -179,7 +180,7 @@ export function MapForm({
     if (!pendingZonePoints) return;
     const terrainType = resolveType(data.terrainTypes);
     if (!terrainType) return;
-    const zone: MapZone = { id: crypto.randomUUID(), terrainTypeId: terrainType.id, points: pendingZonePoints };
+    const zone: MapZone = { id: crypto.randomUUID(), terrainTypeId: terrainType.id, points: pendingZonePoints, generated: false };
     const isNewTerrainType = terrainChoice === "__new__";
     updateFrontmatter(isNewTerrainType ? { terrainTypes: [...data.terrainTypes, terrainType], zones: [...data.zones, zone] } : { zones: [...data.zones, zone] });
     setPendingZonePoints(null);
@@ -213,7 +214,7 @@ export function MapForm({
 
   const confirmLandmass = () => {
     if (!pendingLandmassPoints) return;
-    const landmass: MapLandmass = { id: crypto.randomUUID(), name: newLandmassName.trim(), points: pendingLandmassPoints };
+    const landmass: MapLandmass = { id: crypto.randomUUID(), name: newLandmassName.trim(), points: pendingLandmassPoints, generated: false };
     updateFrontmatter({ landmasses: [...data.landmasses, landmass] });
     setPendingLandmassPoints(null);
     setNewLandmassName("");
@@ -590,6 +591,8 @@ export function MapForm({
               <Button onClick={cancelPin}>Cancel</Button>
             </div>
           )}
+
+          <MapGenerationPanel data={data} workingDims={workingDims} updateFrontmatter={updateFrontmatter} />
         </>
       )}
 
