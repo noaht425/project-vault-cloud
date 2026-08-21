@@ -7,7 +7,7 @@
 // mapGeometry.ts's trip calculator already uses, so mountain ranges
 // naturally tend to become slow-to-expand-across border regions rather
 // than being crossed for free.
-import { type Point } from '../mapGeometry'
+import { pointInPolygon, type Point } from '../mapGeometry'
 import type { MapPin, Territory } from '../noteTypes/map'
 import { computeElevationGrid, terrainDifficulty, MOUNTAIN_ELEVATION_THRESHOLD, type ElevationGridParams } from './elevation'
 import { computeFlowAccumulation } from './hydrology'
@@ -59,9 +59,22 @@ function placeName(seed: number, index: number, styleId: string): string {
 }
 
 export function generateCivilizations(params: CivilizationGenerationParams, idFactory: () => string = () => crypto.randomUUID()): CivilizationGenerationResult {
-  const { seed, widthPixels, heightPixels, seaLevel = 0.5, civilizationCount = 3, settlementCount = 9, territoryMinAreaFraction = MIN_TERRITORY_AREA_FRACTION } = params
+  const { seed, widthPixels, heightPixels, seaLevel = 0.5, civilizationCount = 3, settlementCount = 9, territoryMinAreaFraction = MIN_TERRITORY_AREA_FRACTION, boundaryMask = null } = params
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
-  const isLandCell = (x: number, y: number): boolean => x >= 0 && x < cols && y >= 0 && y < rows && elevation[y][x] >= seaLevel
+  // Same "constrain to an existing/selected polygon instead of the whole
+  // canvas" mechanism as elevation.ts's own insideMask (Phase 5: augment/
+  // drilldown) — this field existed on CivilizationGenerationParams since
+  // Phase 3 but was never actually wired into isLandCell, so "augment
+  // inside this landmass" silently placed settlements/territory anywhere on
+  // the map. Fixed here rather than left for a later phase since it's the
+  // same bug class Phase 5 exists to close.
+  const hasMask = boundaryMask !== null && boundaryMask.length >= 3
+  const insideMask = (x: number, y: number): boolean => {
+    if (!hasMask) return true
+    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+    return pointInPolygon(centerPx, boundaryMask as Point[])
+  }
+  const isLandCell = (x: number, y: number): boolean => x >= 0 && x < cols && y >= 0 && y < rows && elevation[y][x] >= seaLevel && insideMask(x, y)
   const isCoastal = (x: number, y: number): boolean => NEIGHBOR_OFFSETS.some((o) => !isLandCell(x + o.x, y + o.y))
 
   const { accumulation } = computeFlowAccumulation(elevation, cols, rows, isLandCell)

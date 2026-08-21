@@ -5,7 +5,7 @@
 // then a minimum spanning tree over the settlements' pairwise path costs
 // (plus a density dial for extra connections beyond the bare tree) decides
 // which pairs actually get a road.
-import { type Point } from '../mapGeometry'
+import { pointInPolygon, type Point } from '../mapGeometry'
 import type { MapLine } from '../noteTypes/map'
 import { computeElevationGrid, terrainDifficulty, type ElevationGridParams } from './elevation'
 
@@ -23,6 +23,13 @@ export interface RoadGenerationParams extends ElevationGridParams {
   // (a single connected road network, no redundancy); 1 adds roughly
   // twice as many extra connections on top for a denser mesh. Default 0.3.
   roadDensity?: number
+  // Same "constrain to an existing/selected polygon" mechanism as
+  // elevation.ts/civilizations.ts (Phase 5) — without this, a road between
+  // two settlements confined to an augment boundary could still path
+  // through cheaper terrain outside it, visually spilling the "augment
+  // inside this region" promise. Cells outside the mask are treated as
+  // impassable, same as being off the map's landmass entirely.
+  boundaryMask?: Point[] | null
 }
 
 // Single-source Dijkstra over land cells, cost = terrainDifficulty summed
@@ -102,10 +109,16 @@ class UnionFind {
 // pins) — this module converts them to grid cells internally and never
 // needs to know they're settlements specifically; any set of points works.
 export function generateRoads(params: RoadGenerationParams, settlements: Point[], idFactory: () => string = () => crypto.randomUUID()): MapLine[] {
-  const { seaLevel = 0.5, roadLineTypeId = 'road', roadWidthPixels = 6, roadDensity = 0.3 } = params
+  const { seaLevel = 0.5, roadLineTypeId = 'road', roadWidthPixels = 6, roadDensity = 0.3, boundaryMask = null } = params
   if (settlements.length < 2) return []
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
-  const isLandCell = (x: number, y: number): boolean => x >= 0 && x < cols && y >= 0 && y < rows && elevation[y][x] >= seaLevel
+  const hasMask = boundaryMask !== null && boundaryMask.length >= 3
+  const insideMask = (x: number, y: number): boolean => {
+    if (!hasMask) return true
+    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+    return pointInPolygon(centerPx, boundaryMask as Point[])
+  }
+  const isLandCell = (x: number, y: number): boolean => x >= 0 && x < cols && y >= 0 && y < rows && elevation[y][x] >= seaLevel && insideMask(x, y)
 
   const cells: Point[] = settlements.map((s) => ({
     x: Math.min(cols - 1, Math.max(0, Math.floor(s.x / pixelsPerCellX))),

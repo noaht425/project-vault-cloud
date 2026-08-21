@@ -5,6 +5,7 @@ import { generateTerrain, generateRivers, generateClimate, generateCivilizations
 import type { WindDirection } from "@/lib/mapGeneration/climate";
 import { defaultLineTypes, defaultTerrainTypes, type LineType, type MapFrontmatter, type TerrainType } from "@/lib/noteTypes/map";
 import { generatePlaceName, resolvePlaceNameStyle, PLACE_NAME_STYLES } from "@/lib/placeNames";
+import { pointInPolygon, polygonCentroid, type Point } from "@/lib/mapGeometry";
 import { TextField } from "@/components/ui/TextField";
 import { Button } from "@/components/ui/Button";
 
@@ -55,14 +56,47 @@ function resolveRoadLineType(lineTypes: LineType[]): { id: string; newType: Line
 
 const WIND_DIRECTIONS: WindDirection[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
+// Whether a previously-generated shape (given as its own points, zone/
+// landmass/territory polygon or line) should be treated as "inside the area
+// this run is regenerating" and therefore replaceable. No active mask means
+// the whole canvas is in scope — the original, pre-Phase-5 behavior (every
+// generated entry of the right kind gets replaced). With a mask, only
+// entries whose representative point (a plain average — see
+// mapGeometry.ts's polygonCentroid) falls inside it are in scope; anything
+// generated OUTSIDE the mask is left alone, which is what makes "augment
+// just this region" actually non-destructive toward previously generated
+// content elsewhere on the map, not just toward hand-drawn content.
+function isInScope(points: Point[], boundaryMask: Point[] | null): boolean {
+  if (!boundaryMask) return true
+  return pointInPolygon(polygonCentroid(points), boundaryMask);
+}
+
 export function MapGenerationPanel({
   data,
   workingDims,
   updateFrontmatter,
+  boundarySource,
+  setBoundarySource,
+  selectedLandmassId,
+  setSelectedLandmassId,
+  activeBoundaryMask,
+  onStartDrawingRegion,
+  onClearCustomRegion,
 }: {
   data: MapFrontmatter;
   workingDims: { width: number; height: number } | null;
   updateFrontmatter: (patch: Record<string, unknown>) => void;
+  // Phase 5 (augment/drilldown boundary) — owned by MapForm since custom
+  // region selection needs to drive its own `mode`/MapCanvas, same as every
+  // other draw-a-shape flow's state. This panel just consumes the resolved
+  // mask and renders the picker UI for it.
+  boundarySource: "whole-map" | "landmass" | "custom";
+  setBoundarySource: (source: "whole-map" | "landmass" | "custom") => void;
+  selectedLandmassId: string | null;
+  setSelectedLandmassId: (id: string | null) => void;
+  activeBoundaryMask: Point[] | null;
+  onStartDrawingRegion: () => void;
+  onClearCustomRegion: () => void;
 }) {
   const savedParams = (data.generation?.params ?? {}) as Record<string, number | string>;
   const [seed, setSeed] = useState(data.generation?.seed ?? randomSeed());
@@ -129,12 +163,15 @@ export function MapGenerationPanel({
         mountainDensity,
         mountainRuggedness,
         mountainTerrainTypeId,
+        boundaryMask: activeBoundaryMask,
       });
       // Only ever replaces content THIS generator previously produced
-      // (generated:true) — anything hand-drawn survives untouched. Same
-      // non-destructive guarantee every section here follows.
-      const keptLandmasses = data.landmasses.filter((l) => !l.generated);
-      const keptZones = data.zones.filter((z) => !z.generated);
+      // (generated:true) — anything hand-drawn survives untouched — AND,
+      // with an active boundary mask, only the portion of that generated
+      // content actually inside the mask (see isInScope) — so "augment just
+      // this region" never wipes out generated content elsewhere on the map.
+      const keptLandmasses = data.landmasses.filter((l) => !l.generated || !isInScope(l.points, activeBoundaryMask));
+      const keptZones = data.zones.filter((z) => !z.generated || !isInScope(z.points, activeBoundaryMask));
       updateFrontmatter({
         landmasses: [...keptLandmasses, ...result.landmasses],
         zones: [...keptZones, ...result.mountainZones],
@@ -161,12 +198,14 @@ export function MapGenerationPanel({
         mountainRuggedness,
         riverDensity,
         riverLineTypeId,
+        boundaryMask: activeBoundaryMask,
       });
       // Scoped to riverLineTypeId, not just "!generated" — roads are also
       // generated lines sharing this same array, and regenerating rivers
       // must never wipe out a previously-generated road (or vice versa in
-      // generateRoadsNow below).
-      const keptLines = data.lines.filter((l) => !l.generated || l.lineTypeId !== riverLineTypeId);
+      // generateRoadsNow below). Also scoped to the active boundary mask —
+      // see isInScope.
+      const keptLines = data.lines.filter((l) => !l.generated || l.lineTypeId !== riverLineTypeId || !isInScope(l.points, activeBoundaryMask));
       updateFrontmatter({
         lines: [...keptLines, ...rivers],
         lineTypes: newType ? [...data.lineTypes, newType] : data.lineTypes,
@@ -193,10 +232,11 @@ export function MapGenerationPanel({
         prevailingWindDirection,
         topLatitude: data.scaleMode === "latitude" ? data.topLatitude : null,
         bottomLatitude: data.scaleMode === "latitude" ? data.bottomLatitude : null,
+        boundaryMask: activeBoundaryMask,
       });
       const existingTypeIds = new Set(data.climateTypes.map((t) => t.id));
       const newTypes = result.climateTypes.filter((t) => !existingTypeIds.has(t.id));
-      const keptZones = data.climateZones.filter((z) => !z.generated);
+      const keptZones = data.climateZones.filter((z) => !z.generated || !isInScope(z.points, activeBoundaryMask));
       updateFrontmatter({
         climateTypes: [...data.climateTypes, ...newTypes],
         climateZones: [...keptZones, ...result.climateZones],
@@ -221,15 +261,21 @@ export function MapGenerationPanel({
         mountainRuggedness,
         civilizationCount,
         settlementCount,
+        boundaryMask: activeBoundaryMask,
       });
       // Territories are entirely generated content today (there's no
       // manual "paint a territory" tool), so unlike lines/zones there's no
-      // hand-drawn territory to preserve — but pins DO mix freely with
-      // hand-placed ones, so those still filter by generated:true only.
-      const keptPins = data.pins.filter((p) => !p.generated);
+      // hand-drawn territory to preserve — but with an active boundary
+      // mask, a territory OUTSIDE it from a previous (whole-map or
+      // differently-scoped) run must still survive; only ones inside the
+      // current mask get replaced. Pins mix freely with hand-placed ones,
+      // so those filter by generated:true AND scope, same as every other
+      // section.
+      const keptPins = data.pins.filter((p) => !p.generated || !isInScope([{ x: p.x, y: p.y }], activeBoundaryMask));
+      const keptTerritories = data.territories.filter((t) => !isInScope(t.points, activeBoundaryMask));
       updateFrontmatter({
         pins: [...keptPins, ...result.pins],
-        territories: result.territories,
+        territories: [...keptTerritories, ...result.territories],
         generation: mergeGeneration({ civilizationCount, settlementCount }),
       });
     } finally {
@@ -245,10 +291,21 @@ export function MapGenerationPanel({
     try {
       const { id: roadLineTypeId, newType } = resolveRoadLineType(data.lineTypes);
       const roads = generateRoads(
-        { seed, widthPixels: workingDims.width, heightPixels: workingDims.height, landmassScale, seaLevel, mountainDensity, mountainRuggedness, roadDensity, roadLineTypeId },
+        {
+          seed,
+          widthPixels: workingDims.width,
+          heightPixels: workingDims.height,
+          landmassScale,
+          seaLevel,
+          mountainDensity,
+          mountainRuggedness,
+          roadDensity,
+          roadLineTypeId,
+          boundaryMask: activeBoundaryMask,
+        },
         generatedSettlementPoints
       );
-      const keptLines = data.lines.filter((l) => !l.generated || l.lineTypeId !== roadLineTypeId);
+      const keptLines = data.lines.filter((l) => !l.generated || l.lineTypeId !== roadLineTypeId || !isInScope(l.points, activeBoundaryMask));
       updateFrontmatter({
         lines: [...keptLines, ...roads],
         lineTypes: newType ? [...data.lineTypes, newType] : data.lineTypes,
@@ -293,6 +350,51 @@ export function MapGenerationPanel({
         </div>
 
         {!workingDims && <p className="text-sm text-muted">Upload an image or start a blank map above first, so there&apos;s a canvas to generate onto.</p>}
+
+        <div className="border-t border-border pt-3 flex flex-col gap-3">
+          <h4 className="font-medium text-sm">Boundary</h4>
+          <p className="text-sm text-muted">
+            Constrain every section below to inside a boundary instead of the whole canvas — for augmenting just part of your own hand-drawn map, or
+            drilling into a region. Generated content outside the boundary is left untouched by any of the actions below.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {(["whole-map", "landmass", "custom"] as const).map((source) => (
+              <button
+                key={source}
+                className={`px-2.5 py-1 text-sm rounded-md border ${boundarySource === source ? "bg-accent border-accent text-white" : "border-border hover:bg-hover"}`}
+                onClick={() => setBoundarySource(source)}
+              >
+                {source === "whole-map" ? "Whole map" : source === "landmass" ? "Inside a landmass" : "Custom region"}
+              </button>
+            ))}
+          </div>
+          {boundarySource === "landmass" && (
+            <label className="flex flex-col gap-1 text-sm max-w-xs">
+              <span>Landmass (hand-drawn or previously generated)</span>
+              <select value={selectedLandmassId ?? ""} onChange={(e) => setSelectedLandmassId(e.target.value || null)}>
+                <option value="">Choose…</option>
+                {data.landmasses.map((l, i) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name || `Landmass ${i + 1}`}
+                    {l.generated ? " (generated)" : ""}
+                  </option>
+                ))}
+              </select>
+              {data.landmasses.length === 0 && <span className="text-muted">No landmasses yet — draw one (Draw Landmass) or run Terrain generation first.</span>}
+            </label>
+          )}
+          {boundarySource === "custom" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={onStartDrawingRegion}>{activeBoundaryMask ? "Redraw region" : "Draw region"}</Button>
+              {activeBoundaryMask && <Button onClick={onClearCustomRegion}>Clear region</Button>}
+            </div>
+          )}
+          {activeBoundaryMask ? (
+            <p className="text-sm text-muted">Boundary active (shown highlighted on the map) — every section below only affects this area.</p>
+          ) : boundarySource !== "whole-map" ? (
+            <p className="text-sm text-muted">No boundary selected yet — generation below still runs across the whole map until one is set.</p>
+          ) : null}
+        </div>
 
         <div className="border-t border-border pt-3 flex flex-col gap-3">
           <h4 className="font-medium text-sm">Terrain</h4>

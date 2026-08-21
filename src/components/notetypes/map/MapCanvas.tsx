@@ -5,7 +5,7 @@ import { foldDrawnPathAtWraps, segmentDistance, type Point, type WrapConfig } fr
 import { pinDisplayLabel, type ClimateType, type ClimateZone, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType, type Territory } from "@/lib/noteTypes/map";
 import { Button } from "@/components/ui/Button";
 
-export type MapCanvasMode = "view" | "calibrate" | "paint-zone" | "draw-line" | "paint-landmass" | "draw-trip" | "place-pin";
+export type MapCanvasMode = "view" | "calibrate" | "paint-zone" | "draw-line" | "paint-landmass" | "draw-trip" | "place-pin" | "select-region";
 
 interface ViewBox {
   x: number;
@@ -63,6 +63,19 @@ export interface MapCanvasProps {
   onTripDrawn: (points: Point[]) => void;
   onPinPlaced: (point: Point) => void;
   onPinClick: (pin: MapPin) => void;
+  // "select-region" mode's own drawn boundary (Phase 5 — augment/drilldown
+  // boundary selection) — same multi-point click/Finish/Clear flow as
+  // paint-landmass, just producing a boundaryMask instead of a real
+  // landmass. Optional since most callers (nothing pre-Phase-5) never use
+  // this mode.
+  onRegionDrawn?: (points: Point[]) => void;
+  // The CURRENTLY ACTIVE boundary constraint (from an existing landmass or
+  // a confirmed select-region draft) — rendered as a persistent highlighted
+  // overlay whenever set, regardless of mode, so it's clear what area
+  // "Generate" is about to be scoped to even after leaving select-region
+  // mode. Distinct from the in-progress regionDraft (which only renders
+  // while mode === "select-region").
+  boundaryMask?: Point[] | null;
   highlightedPinIds?: Set<string>;
   tripPath?: Point[][] | null;
   equatorY?: number | null;
@@ -114,6 +127,8 @@ export function MapCanvas({
   onTripDrawn,
   onPinPlaced,
   onPinClick,
+  onRegionDrawn,
+  boundaryMask,
   highlightedPinIds,
   tripPath,
   equatorY,
@@ -132,6 +147,7 @@ export function MapCanvas({
   const [lineDraft, setLineDraft] = useState<Point[]>([]);
   const [landmassDraft, setLandmassDraft] = useState<Point[]>([]);
   const [tripDraft, setTripDraft] = useState<Point[]>([]);
+  const [regionDraft, setRegionDraft] = useState<Point[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const pinchRef = useRef<{ startDist: number; startMidX: number; startMidY: number; origVb: ViewBox } | null>(null);
@@ -309,6 +325,7 @@ export function MapCanvas({
     setLineDraft([]);
     setLandmassDraft([]);
     setTripDraft([]);
+    setRegionDraft([]);
   }
 
   useEffect(() => {
@@ -341,11 +358,18 @@ export function MapCanvas({
         } else if (e.key === "Escape") {
           setTripDraft([]);
         }
+      } else if (mode === "select-region") {
+        if (e.key === "Enter" && regionDraft.length >= 3) {
+          onRegionDrawn?.(regionDraft);
+          setRegionDraft([]);
+        } else if (e.key === "Escape") {
+          setRegionDraft([]);
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, zoneDraft, onZoneDrawn, lineDraft, onLineDrawn, landmassDraft, onLandmassDrawn, tripDraft, onTripDrawn]);
+  }, [mode, zoneDraft, onZoneDrawn, lineDraft, onLineDrawn, landmassDraft, onLandmassDrawn, tripDraft, onTripDrawn, regionDraft, onRegionDrawn]);
 
   const clientToSvgPoint = (clientX: number, clientY: number): Point | null => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -373,6 +397,8 @@ export function MapCanvas({
       setTripDraft((pts) => [...pts, point]);
     } else if (mode === "place-pin") {
       onPinPlaced(point);
+    } else if (mode === "select-region") {
+      setRegionDraft((pts) => [...pts, point]);
     }
   };
   useEffect(() => {
@@ -432,7 +458,7 @@ export function MapCanvas({
       window.removeEventListener("mouseup", handleMouseUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewBox.w, viewBox.h, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft]);
+  }, [viewBox.w, viewBox.h, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft, regionDraft]);
 
   // Touch equivalent of the mouse pan/click handling above — a single
   // finger either pans (moved past CLICK_MOVEMENT_THRESHOLD) or taps (place
@@ -558,7 +584,7 @@ export function MapCanvas({
       window.removeEventListener("touchcancel", handleTouchEnd);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageWidth, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft]);
+  }, [imageWidth, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft, regionDraft]);
 
   // Touch has no equivalent of Enter/Escape — a "Finish (N points)"/"Clear
   // points" bar covers every multi-point draft mode whenever there's at
@@ -574,7 +600,9 @@ export function MapCanvas({
           ? { count: landmassDraft.length, min: 3, finish: () => { onLandmassDrawn(landmassDraft); setLandmassDraft([]); }, clear: () => setLandmassDraft([]) }
           : mode === "draw-trip"
             ? { count: tripDraft.length, min: 2, finish: () => { onTripDrawn(tripDraft); setTripDraft([]); }, clear: () => setTripDraft([]) }
-            : null;
+            : mode === "select-region"
+              ? { count: regionDraft.length, min: 3, finish: () => { onRegionDrawn?.(regionDraft); setRegionDraft([]); }, clear: () => setRegionDraft([]) }
+              : null;
 
   return (
     <div className="relative w-full h-full">
@@ -638,7 +666,33 @@ export function MapCanvas({
           </g>
         )}
 
+        {mode === "select-region" && regionDraft.length > 0 && (
+          <g>
+            <polyline points={regionDraft.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#000" strokeWidth={4} />
+            <polyline points={regionDraft.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#e0a83c" strokeDasharray="4,2" strokeWidth={2} />
+            {regionDraft.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={4} fill="#e0a83c" stroke="#000" strokeWidth={1.5} />
+            ))}
+          </g>
+        )}
+
         {mode === "calibrate" && calibrationStart && <circle cx={calibrationStart.x} cy={calibrationStart.y} r={6} fill="#fff" stroke="#000" strokeWidth={2} />}
+
+        {/* The CONFIRMED active boundary mask (Phase 5) — a persistent
+            highlighted overlay independent of mode, so "what's about to be
+            generated inside" stays visible while adjusting Generate panel
+            sliders, not just while actively drawing it. */}
+        {boundaryMask && boundaryMask.length >= 3 && (
+          <polygon
+            points={boundaryMask.map((p) => `${p.x},${p.y}`).join(" ")}
+            fill="#e0a83c"
+            fillOpacity={0.08}
+            stroke="#e0a83c"
+            strokeOpacity={0.9}
+            strokeWidth={3}
+            strokeDasharray="10,5"
+          />
+        )}
 
         {equatorY != null && (
           <g>

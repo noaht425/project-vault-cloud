@@ -90,4 +90,36 @@ describe('generateCivilizations', () => {
     const result = generateCivilizations({ seed: 4, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.3 }, idSequence())
     for (const t of result.territories) expect(t.id).toMatch(/^id-\d+$/)
   })
+
+  // Regression: boundaryMask was accepted on CivilizationGenerationParams
+  // since Phase 3 but never actually read by isLandCell, so "augment inside
+  // this landmass" (Phase 5) silently placed settlements/territory anywhere
+  // on the map. Same mask/tolerance shape as elevation.test.ts's own
+  // boundaryMask coverage.
+  it('a boundaryMask confines every settlement pin and territory point within it', () => {
+    const mask = [
+      { x: 100, y: 100 },
+      { x: 500, y: 100 },
+      { x: 500, y: 500 },
+      { x: 100, y: 500 }
+    ]
+    const result = generateCivilizations(
+      { seed: 9, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.2, civilizationCount: 2, settlementCount: 6, boundaryMask: mask },
+      idSequence()
+    )
+    for (const p of result.pins) {
+      expect(p.x).toBeGreaterThanOrEqual(90)
+      expect(p.x).toBeLessThanOrEqual(510)
+      expect(p.y).toBeGreaterThanOrEqual(90)
+      expect(p.y).toBeLessThanOrEqual(510)
+    }
+    for (const t of result.territories) {
+      for (const point of t.points) {
+        expect(point.x).toBeGreaterThanOrEqual(90)
+        expect(point.x).toBeLessThanOrEqual(510)
+        expect(point.y).toBeGreaterThanOrEqual(90)
+        expect(point.y).toBeLessThanOrEqual(510)
+      }
+    }
+  })
 })

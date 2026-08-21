@@ -126,6 +126,18 @@ export function pointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside
 }
 
+// Plain average-of-vertices centroid — not area-weighted (a real polygon
+// centroid would need the shoelace-weighted formula), but this is only ever
+// used as a cheap "roughly where is this shape" representative point (e.g.
+// deciding whether a generated zone/territory falls inside an active
+// boundary mask during augment-mode regeneration), not for anything
+// requiring geometric precision.
+export function polygonCentroid(points: Point[]): Point {
+  if (points.length === 0) return { x: 0, y: 0 }
+  const sum = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 })
+  return { x: sum.x / points.length, y: sum.y / points.length }
+}
+
 // A map with no landmasses drawn treats everywhere as land — same as the
 // pre-landmass behavior, so existing maps don't silently pick up a "water"
 // default they never configured. Once at least one landmass exists, a point

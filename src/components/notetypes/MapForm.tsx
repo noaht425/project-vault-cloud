@@ -105,6 +105,19 @@ export function MapForm({
   const [pendingLandmassPoints, setPendingLandmassPoints] = useState<Point[] | null>(null);
   const [newLandmassName, setNewLandmassName] = useState("");
 
+  // Generation boundary (Phase 5 — augment/drilldown): constrains every
+  // "Generate ___" action to inside a boundary instead of the whole canvas,
+  // either an existing landmass (hand-drawn or previously generated) or a
+  // freshly-drawn custom region — see the map generation plan's core design
+  // decision #6 ("augment my hand-drawn map" and "drill into a region" are
+  // the same masked-generation mechanism). Lives here (not inside
+  // MapGenerationPanel) because selecting a custom region needs to drive
+  // this component's own `mode`/MapCanvas, same reason every other
+  // draw-a-shape flow's state lives here.
+  const [boundarySource, setBoundarySource] = useState<"whole-map" | "landmass" | "custom">("whole-map");
+  const [selectedLandmassId, setSelectedLandmassId] = useState<string | null>(null);
+  const [customBoundaryMask, setCustomBoundaryMask] = useState<Point[] | null>(null);
+
   const [pendingPinPoint, setPendingPinPoint] = useState<Point | null>(null);
   const [pinQuery, setPinQuery] = useState("");
   const [pinResults, setPinResults] = useState<{ title: string }[]>([]);
@@ -369,6 +382,9 @@ export function MapForm({
   const derivedEquatorY = data.scaleMode === "latitude" && data.topLatitude !== null && data.bottomLatitude !== null ? deriveEquatorY(data.topLatitude, data.bottomLatitude, workingDims?.height ?? 0) : null;
   const effectiveScale = data.scaleMode === "latitude" ? derivedScale : data.scale;
 
+  const activeBoundaryMask: Point[] | null =
+    boundarySource === "landmass" ? (data.landmasses.find((l) => l.id === selectedLandmassId)?.points ?? null) : boundarySource === "custom" ? customBoundaryMask : null;
+
   const [showLandmasses, setShowLandmasses] = useState(true);
   const [showZones, setShowZones] = useState(true);
   const [showLines, setShowLines] = useState(true);
@@ -495,6 +511,7 @@ export function MapForm({
           {mode === "paint-landmass" && !pendingLandmassPoints && <p className="text-sm text-muted">Tap to trace a continent or island&apos;s outline, then Finish (3+ points).</p>}
           {mode === "draw-trip" && <p className="text-sm text-muted">Tap to trace the actual route you&apos;d travel, then Finish (2+ points).</p>}
           {mode === "place-pin" && !pendingPinPoint && <p className="text-sm text-muted">Tap a spot on the map to place a pin.</p>}
+          {mode === "select-region" && <p className="text-sm text-muted">Tap to trace the region to constrain generation to, then Finish (3+ points).</p>}
 
           <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
             <label className="flex items-center gap-1.5 text-sm">
@@ -559,6 +576,12 @@ export function MapForm({
                 setPinResults([]);
               }}
               onPinClick={(pin) => pin.locationTitle && void openLocationNote(pin.locationTitle)}
+              onRegionDrawn={(points) => {
+                setCustomBoundaryMask(points);
+                setBoundarySource("custom");
+                setMode("view");
+              }}
+              boundaryMask={activeBoundaryMask}
               highlightedPinIds={highlightedPinIds}
               tripPath={tripOverlayPath}
               equatorY={derivedEquatorY}
@@ -694,7 +717,21 @@ export function MapForm({
             </div>
           )}
 
-          <MapGenerationPanel data={data} workingDims={workingDims} updateFrontmatter={updateFrontmatter} />
+          <MapGenerationPanel
+            data={data}
+            workingDims={workingDims}
+            updateFrontmatter={updateFrontmatter}
+            boundarySource={boundarySource}
+            setBoundarySource={setBoundarySource}
+            selectedLandmassId={selectedLandmassId}
+            setSelectedLandmassId={setSelectedLandmassId}
+            activeBoundaryMask={activeBoundaryMask}
+            onStartDrawingRegion={() => setMode("select-region")}
+            onClearCustomRegion={() => {
+              setCustomBoundaryMask(null);
+              if (boundarySource === "custom") setBoundarySource("whole-map");
+            }}
+          />
         </>
       )}
 

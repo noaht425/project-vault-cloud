@@ -86,4 +86,29 @@ describe('generateRoads', () => {
     const roads = generateRoads({ seed: 1, widthPixels: 1000, heightPixels: 1000, seaLevel: 5 }, settlements, idSequence())
     expect(roads).toEqual([])
   })
+
+  // A boundaryMask that only covers 2 of the 4 settlements should still
+  // connect those 2 (a mask doesn't make land INSIDE it any less passable),
+  // but must never path through the excluded settlements or the space
+  // around them — same "augment inside this region" guarantee civilizations.ts's
+  // own boundaryMask test covers.
+  it('a boundaryMask confines every road point within it, and skips settlements it excludes', () => {
+    const mask = [
+      { x: 0, y: 0 },
+      { x: 650, y: 0 },
+      { x: 650, y: 300 },
+      { x: 0, y: 300 }
+    ]
+    // Only settlements[0] (100,100) and settlements[1] (500,150) fall inside this mask.
+    const roads = generateRoads({ seed: 2, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.2, boundaryMask: mask }, settlements, idSequence())
+    expect(roads.length).toBeGreaterThan(0)
+    for (const road of roads) {
+      for (const p of road.points) {
+        expect(p.x).toBeGreaterThanOrEqual(-10)
+        expect(p.x).toBeLessThanOrEqual(660)
+        expect(p.y).toBeGreaterThanOrEqual(-10)
+        expect(p.y).toBeLessThanOrEqual(310)
+      }
+    }
+  })
 })
