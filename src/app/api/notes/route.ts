@@ -14,6 +14,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim() ?? "";
   const type = searchParams.get("type") ?? undefined;
+  // Map generation plan's Phase 6 (multi-scale drilldown): finds a map's
+  // own child maps by their generation.parentMapTitle, rather than the
+  // caller fetching every map note's full frontmatter to filter client-side.
+  // Only meaningful alongside type=map, but harmless (just an extra no-op
+  // filter) if passed without it.
+  const parentMapTitle = searchParams.get("parentMapTitle") ?? undefined;
   // An empty query with NO type filter is a genuinely-empty autocomplete
   // box — short-circuiting to [] avoids an unfiltered near-global list for
   // that case. But an empty query WITH a type filter (e.g. "every
@@ -47,6 +53,7 @@ export async function GET(request: Request) {
     .order("name")
     .limit(500);
   if (type) query = query.eq("note_type", type);
+  if (parentMapTitle) query = query.eq("frontmatter->generation->>parentMapTitle", parentMapTitle);
 
   const { data: notes, error } = await query;
   if (error) return dbErrorResponse(error, "GET /api/notes search");

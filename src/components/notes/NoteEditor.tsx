@@ -238,7 +238,7 @@ export function NoteEditor({ noteId }: { noteId: string }) {
           nothing, while the title/tabs above stay reachable without
           scrolling back up. */}
       <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-        <NoteTypeForm frontmatter={frontmatterDraft} body={bodyDraft} onChange={updateFrontmatter} onBodyChange={updateBody} />
+        <NoteTypeForm noteName={note.name} frontmatter={frontmatterDraft} body={bodyDraft} onChange={updateFrontmatter} onBodyChange={updateBody} />
         {/* Capped and centered on desktop — a NoteTypeForm above (when
             present) still uses the full pane width for its own tables/
             grids/canvas, but prose body text at full desktop width runs an

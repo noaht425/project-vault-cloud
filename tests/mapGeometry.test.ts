@@ -16,6 +16,7 @@ import {
   distortedSegmentRealDistance,
   deriveEquatorY,
   deriveScaleFromLatitudeSpan,
+  boundingBoxOf,
   type WrapConfig,
   type LatitudeDistortionConfig
 } from '../src/lib/mapGeometry'
@@ -717,5 +718,19 @@ describe('deriveScaleFromLatitudeSpan', () => {
     expect(equatorY).toBeCloseTo(500, 9) // dead center, as expected for a symmetric pole-to-pole span
     expect(latitudeRadiansAt(0, scale, { equatorY: equatorY!, planetCircumference: 21600 })).toBeCloseTo(Math.PI / 2, 6) // top = 90N
     expect(latitudeRadiansAt(1000, scale, { equatorY: equatorY!, planetCircumference: 21600 })).toBeCloseTo(-Math.PI / 2, 6) // bottom = 90S
+  })
+})
+
+describe('boundingBoxOf', () => {
+  it('finds the min/max extent of an arbitrary point set', () => {
+    expect(boundingBoxOf([{ x: 10, y: 20 }, { x: 50, y: 5 }, { x: 30, y: 100 }])).toEqual({ x: 10, y: 5, width: 40, height: 95 })
+  })
+
+  it('is a zero-size box at the single point for a degenerate one-point input', () => {
+    expect(boundingBoxOf([{ x: 7, y: 9 }])).toEqual({ x: 7, y: 9, width: 0, height: 0 })
+  })
+
+  it('is all-zero for an empty input', () => {
+    expect(boundingBoxOf([])).toEqual({ x: 0, y: 0, width: 0, height: 0 })
   })
 })

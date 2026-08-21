@@ -138,6 +138,24 @@ export function polygonCentroid(points: Point[]): Point {
   return { x: sum.x / points.length, y: sum.y / points.length }
 }
 
+// Axis-aligned bounding rectangle of an arbitrary point set (e.g. a
+// select-region polygon or a landmass boundary) — used by the map
+// generation plan's Phase 6 (multi-scale drilldown) to turn a selected
+// boundary into a concrete pixel rectangle for a child map's parentBounds
+// and to derive its cropped canvas size. {x: 0, y: 0, width: 0, height: 0}
+// for an empty input, a degenerate case the caller should already be
+// guarding against (a region needs at least one point to mean anything).
+export function boundingBoxOf(points: Point[]): { x: number; y: number; width: number; height: number } {
+  if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 }
+  const xs = points.map((p) => p.x)
+  const ys = points.map((p) => p.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
 // A map with no landmasses drawn treats everywhere as land — same as the
 // pre-landmass behavior, so existing maps don't silently pick up a "water"
 // default they never configured. Once at least one landmass exists, a point

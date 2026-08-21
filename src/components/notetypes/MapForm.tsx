@@ -72,9 +72,16 @@ const MODE_LABELS: { id: MapCanvasMode; label: string }[] = [
 // noteRefApi, and Supabase Storage upload via a <input type="file"> instead
 // of Electron's native file-picker IPC.
 export function MapForm({
+  noteName,
   frontmatter,
   onChange,
 }: {
+  // This map note's own title — needed for Phase 6 (multi-scale
+  // drilldown): a child map created from a selected region stamps
+  // generation.parentMapTitle with noteName, and "Parent map" navigation
+  // resolves data.generation.parentMapTitle back to a note by title the
+  // same way pins resolve locationTitle.
+  noteName: string;
   frontmatter: Record<string, unknown>;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
@@ -719,6 +726,7 @@ export function MapForm({
 
           <MapGenerationPanel
             data={data}
+            noteName={noteName}
             workingDims={workingDims}
             updateFrontmatter={updateFrontmatter}
             boundarySource={boundarySource}

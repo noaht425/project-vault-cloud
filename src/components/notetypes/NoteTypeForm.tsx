@@ -22,11 +22,16 @@ import { MapForm } from "./MapForm";
 // is only used by FamilyTreeForm, the one form that writes to the body
 // (relationship bullets) rather than just frontmatter.
 export function NoteTypeForm({
+  noteName,
   frontmatter,
   body,
   onChange,
   onBodyChange,
 }: {
+  // Only MapForm uses this today (Phase 6 parent/child map drilldown needs
+  // a map note's own title to stamp onto a child note it creates, and to
+  // resolve its own parent by title) — every other form ignores it.
+  noteName: string;
   frontmatter: Record<string, unknown>;
   body: string;
   onChange: (patch: Record<string, unknown>) => void;
@@ -62,7 +67,7 @@ export function NoteTypeForm({
     case "settlement":
       return <SettlementForm frontmatter={frontmatter} onChange={onChange} />;
     case "map":
-      return <MapForm frontmatter={frontmatter} onChange={onChange} />;
+      return <MapForm noteName={noteName} frontmatter={frontmatter} onChange={onChange} />;
     default:
       return null;
   }
