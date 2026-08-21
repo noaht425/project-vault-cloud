@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { mapFrontmatterSchema, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType } from "@/lib/noteTypes/map";
+import { mapFrontmatterSchema, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType, type Territory } from "@/lib/noteTypes/map";
 import { crossingTime, deriveEquatorY, deriveScaleFromLatitudeSpan, foldDrawnPathAtWraps, pointInPolygon, type Point } from "@/lib/mapGeometry";
 import { uploadMapImage, getMapImageUrl } from "@/lib/mapImageStorage";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
@@ -61,6 +61,7 @@ const MODE_LABELS: { id: MapCanvasMode; label: string }[] = [
   { id: "paint-zone", label: "Paint Terrain" },
   { id: "draw-line", label: "Draw Line" },
   { id: "paint-landmass", label: "Draw Landmass" },
+  { id: "paint-territory", label: "Draw Territory" },
   { id: "place-pin", label: "Place Pin" },
 ];
 
@@ -111,6 +112,9 @@ export function MapForm({
   const [lineWidthInput, setLineWidthInput] = useState(20);
   const [pendingLandmassPoints, setPendingLandmassPoints] = useState<Point[] | null>(null);
   const [newLandmassName, setNewLandmassName] = useState("");
+  const [pendingTerritoryPoints, setPendingTerritoryPoints] = useState<Point[] | null>(null);
+  const [newTerritoryName, setNewTerritoryName] = useState("");
+  const [newTerritoryColor, setNewTerritoryColor] = useState("#8899aa");
 
   // Generation boundary (Phase 5 — augment/drilldown): constrains every
   // "Generate ___" action to inside a boundary instead of the whole canvas,
@@ -267,6 +271,37 @@ export function MapForm({
     setMode("view");
   };
 
+  // Hand-drawn territory (national/civilization border) — same "trace,
+  // name, confirm" flow as a landmass, but with a color (territories render
+  // as a tinted/outlined region, unlike a landmass which has no color of
+  // its own) and generated:false so a later "Generate civilizations" run
+  // never replaces it (see MapGenerationPanel.tsx's keptTerritories filter).
+  // Naming style/settlement-preset assignment happens afterward in the
+  // Generate panel's Civilizations section, same as for a generated
+  // territory — no need to duplicate those pickers here.
+  const confirmTerritory = () => {
+    if (!pendingTerritoryPoints) return;
+    const territory: Territory = {
+      id: crypto.randomUUID(),
+      name: newTerritoryName.trim(),
+      points: pendingTerritoryPoints,
+      color: newTerritoryColor,
+      presetNoteTitle: null,
+      capitalPinId: null,
+      namingStyleId: null,
+      generated: false,
+    };
+    updateFrontmatter({ territories: [...data.territories, territory] });
+    setPendingTerritoryPoints(null);
+    setNewTerritoryName("");
+    setMode("view");
+  };
+  const cancelTerritory = () => {
+    setPendingTerritoryPoints(null);
+    setNewTerritoryName("");
+    setMode("view");
+  };
+
   const confirmPin = (title: string) => {
     if (!pendingPinPoint) return;
     updateFrontmatter({ pins: [...data.pins, { id: crypto.randomUUID(), x: pendingPinPoint.x, y: pendingPinPoint.y, locationTitle: title, label: "" }] });
@@ -361,6 +396,7 @@ export function MapForm({
   const removeZone = (id: string) => updateFrontmatter({ zones: data.zones.filter((z) => z.id !== id) });
   const removeLine = (id: string) => updateFrontmatter({ lines: data.lines.filter((l) => l.id !== id) });
   const removeLandmass = (id: string) => updateFrontmatter({ landmasses: data.landmasses.filter((l) => l.id !== id) });
+  const removeTerritory = (id: string) => updateFrontmatter({ territories: data.territories.filter((t) => t.id !== id) });
   const removeTerrainType = (id: string) =>
     updateFrontmatter({
       terrainTypes: data.terrainTypes.filter((t) => t.id !== id),
@@ -516,6 +552,7 @@ export function MapForm({
           {mode === "paint-zone" && !pendingZonePoints && <p className="text-sm text-muted">Tap to add vertices, then Finish (3+ points).</p>}
           {mode === "draw-line" && !pendingLinePoints && <p className="text-sm text-muted">Tap to add points along a road, path, or river, then Finish (2+ points).</p>}
           {mode === "paint-landmass" && !pendingLandmassPoints && <p className="text-sm text-muted">Tap to trace a continent or island&apos;s outline, then Finish (3+ points).</p>}
+          {mode === "paint-territory" && !pendingTerritoryPoints && <p className="text-sm text-muted">Tap to trace a nation&apos;s border, then Finish (3+ points).</p>}
           {mode === "draw-trip" && <p className="text-sm text-muted">Tap to trace the actual route you&apos;d travel, then Finish (2+ points).</p>}
           {mode === "place-pin" && !pendingPinPoint && <p className="text-sm text-muted">Tap a spot on the map to place a pin.</p>}
           {mode === "select-region" && <p className="text-sm text-muted">Tap to trace the region to constrain generation to, then Finish (3+ points).</p>}
@@ -568,6 +605,7 @@ export function MapForm({
               onZoneDrawn={setPendingZonePoints}
               onLineDrawn={setPendingLinePoints}
               onLandmassDrawn={setPendingLandmassPoints}
+              onTerritoryDrawn={setPendingTerritoryPoints}
               onTripDrawn={(points) => {
                 setDrawnTripPath(points);
                 const legs =
@@ -705,6 +743,17 @@ export function MapForm({
                 Add landmass
               </Button>
               <Button onClick={cancelLandmass}>Cancel</Button>
+            </div>
+          )}
+
+          {pendingTerritoryPoints && (
+            <div className="flex flex-wrap items-end gap-2">
+              <TextField label="Name (optional)" className="w-48" value={newTerritoryName} onChange={(e) => setNewTerritoryName(e.target.value)} placeholder="Kingdom of Arenis" autoFocus />
+              <TextField label="Color" type="color" className="w-14" value={newTerritoryColor} onChange={(e) => setNewTerritoryColor(e.target.value)} />
+              <Button variant="primary" onClick={confirmTerritory}>
+                Add territory
+              </Button>
+              <Button onClick={cancelTerritory}>Cancel</Button>
             </div>
           )}
 
@@ -859,6 +908,26 @@ export function MapForm({
               ))}
             </select>
           </label>
+        </details>
+      )}
+
+      {data.territories.length > 0 && (
+        <details>
+          <summary className="font-medium cursor-pointer">Territories (nations) ({data.territories.length})</summary>
+          <p className="text-sm text-muted mt-1">
+            Name each nation, pick a naming style, and assign a settlement preset in the Generate panel&apos;s Civilizations section below —
+            this list is just for an overview and for deleting one.
+          </p>
+          {data.territories.map((territory) => (
+            <div key={territory.id} className="flex items-center gap-1.5 text-sm mt-1">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: territory.color }} />
+              <span>{territory.name || "Unnamed territory"}</span>
+              {!territory.generated && <span className="text-xs text-muted">(hand-drawn)</span>}
+              <button className="text-muted hover:text-danger bg-transparent border-0 cursor-pointer px-1" onClick={() => removeTerritory(territory.id)}>
+                ✕
+              </button>
+            </div>
+          ))}
         </details>
       )}
 

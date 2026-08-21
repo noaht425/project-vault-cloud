@@ -152,7 +152,7 @@ export function polygonArea(points: Point[]): number {
 // coastline. Purely cosmetic — never changes topology (loop stays closed,
 // no new components), so it's safe to run after area-filtering rather than
 // before.
-export function smoothPolygon(points: Point[], iterations = 2): Point[] {
+export function smoothPolygon(points: Point[], iterations = 3): Point[] {
   let current = points
   for (let iter = 0; iter < iterations; iter++) {
     if (current.length < 3) return current

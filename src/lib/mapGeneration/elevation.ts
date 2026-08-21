@@ -14,8 +14,11 @@ export interface ElevationGridParams {
   heightPixels: number
   // Cells along the map's longer dimension — the elevation grid's actual
   // resolution. Higher = finer coastline detail but more compute. Default
-  // 48 is enough detail for a fantasy-map-style coastline at typical map
-  // sizes without being slow.
+  // 96 balances a natural-looking coastline (each grid-aligned "step" the
+  // tracer produces is small enough that smoothPolygon's corner-cutting
+  // reads as organic curves rather than a visible staircase — 48 produced
+  // a noticeably blocky coastline at typical map sizes) against staying
+  // fast at typical map sizes.
   gridResolution?: number
   // 0-1. Relative size of continent-scale features — smaller values
   // produce more, smaller landmasses; larger values produce fewer, bigger
@@ -65,7 +68,7 @@ function smoothstepBetween(edge0: number, edge1: number, x: number): number {
 // anywhere — see the procedural map generation plan's core design
 // decision #1 — every caller recomputes it fresh from params each time.
 export function computeElevationGrid(params: ElevationGridParams): ElevationGrid {
-  const { seed, widthPixels, heightPixels, gridResolution = 48, landmassScale = 0.35, mountainDensity = 0.35, mountainRuggedness = 0.5 } = params
+  const { seed, widthPixels, heightPixels, gridResolution = 96, landmassScale = 0.35, mountainDensity = 0.35, mountainRuggedness = 0.5 } = params
 
   const longerDimension = Math.max(widthPixels, heightPixels, 1)
   const cols = Math.max(4, Math.round((widthPixels / longerDimension) * gridResolution))
@@ -172,7 +175,7 @@ export function generateTerrain(params: TerrainGenerationParams, idFactory: () =
       // below and get emitted as its own landmass/mountain-zone-shaped-
       // like-a-lake, which is exactly backwards.
       .filter((loop) => signedPolygonArea(loop) > 0)
-      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 2))
+      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 3))
       .filter((poly) => polygonArea(poly) >= minAreaFraction * totalPixelArea)
   }
 

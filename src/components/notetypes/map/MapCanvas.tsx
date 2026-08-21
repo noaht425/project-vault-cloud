@@ -5,7 +5,7 @@ import { foldDrawnPathAtWraps, segmentDistance, type Point, type WrapConfig } fr
 import { pinDisplayLabel, type ClimateType, type ClimateZone, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType, type Territory } from "@/lib/noteTypes/map";
 import { Button } from "@/components/ui/Button";
 
-export type MapCanvasMode = "view" | "calibrate" | "paint-zone" | "draw-line" | "paint-landmass" | "draw-trip" | "place-pin" | "select-region";
+export type MapCanvasMode = "view" | "calibrate" | "paint-zone" | "draw-line" | "paint-landmass" | "draw-trip" | "place-pin" | "select-region" | "paint-territory";
 
 interface ViewBox {
   x: number;
@@ -60,6 +60,10 @@ export interface MapCanvasProps {
   onZoneDrawn: (points: Point[]) => void;
   onLineDrawn: (points: Point[]) => void;
   onLandmassDrawn: (points: Point[]) => void;
+  // "paint-territory" mode — a hand-drawn national/civilization border,
+  // same multi-point click/Finish/Clear flow as paint-landmass. Optional
+  // since callers that predate this mode never pass it.
+  onTerritoryDrawn?: (points: Point[]) => void;
   onTripDrawn: (points: Point[]) => void;
   onPinPlaced: (point: Point) => void;
   onPinClick: (pin: MapPin) => void;
@@ -124,6 +128,7 @@ export function MapCanvas({
   onZoneDrawn,
   onLineDrawn,
   onLandmassDrawn,
+  onTerritoryDrawn,
   onTripDrawn,
   onPinPlaced,
   onPinClick,
@@ -146,6 +151,7 @@ export function MapCanvas({
   const [zoneDraft, setZoneDraft] = useState<Point[]>([]);
   const [lineDraft, setLineDraft] = useState<Point[]>([]);
   const [landmassDraft, setLandmassDraft] = useState<Point[]>([]);
+  const [territoryDraft, setTerritoryDraft] = useState<Point[]>([]);
   const [tripDraft, setTripDraft] = useState<Point[]>([]);
   const [regionDraft, setRegionDraft] = useState<Point[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -324,6 +330,7 @@ export function MapCanvas({
     setZoneDraft([]);
     setLineDraft([]);
     setLandmassDraft([]);
+    setTerritoryDraft([]);
     setTripDraft([]);
     setRegionDraft([]);
   }
@@ -351,6 +358,13 @@ export function MapCanvas({
         } else if (e.key === "Escape") {
           setLandmassDraft([]);
         }
+      } else if (mode === "paint-territory") {
+        if (e.key === "Enter" && territoryDraft.length >= 3) {
+          onTerritoryDrawn?.(territoryDraft);
+          setTerritoryDraft([]);
+        } else if (e.key === "Escape") {
+          setTerritoryDraft([]);
+        }
       } else if (mode === "draw-trip") {
         if (e.key === "Enter" && tripDraft.length >= 2) {
           onTripDrawn(tripDraft);
@@ -369,7 +383,7 @@ export function MapCanvas({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, zoneDraft, onZoneDrawn, lineDraft, onLineDrawn, landmassDraft, onLandmassDrawn, tripDraft, onTripDrawn, regionDraft, onRegionDrawn]);
+  }, [mode, zoneDraft, onZoneDrawn, lineDraft, onLineDrawn, landmassDraft, onLandmassDrawn, territoryDraft, onTerritoryDrawn, tripDraft, onTripDrawn, regionDraft, onRegionDrawn]);
 
   const clientToSvgPoint = (clientX: number, clientY: number): Point | null => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -393,6 +407,8 @@ export function MapCanvas({
       setLineDraft((pts) => [...pts, point]);
     } else if (mode === "paint-landmass") {
       setLandmassDraft((pts) => [...pts, point]);
+    } else if (mode === "paint-territory") {
+      setTerritoryDraft((pts) => [...pts, point]);
     } else if (mode === "draw-trip") {
       setTripDraft((pts) => [...pts, point]);
     } else if (mode === "place-pin") {
@@ -458,7 +474,7 @@ export function MapCanvas({
       window.removeEventListener("mouseup", handleMouseUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewBox.w, viewBox.h, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft, regionDraft]);
+  }, [viewBox.w, viewBox.h, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, territoryDraft, tripDraft, regionDraft]);
 
   // Touch equivalent of the mouse pan/click handling above — a single
   // finger either pans (moved past CLICK_MOVEMENT_THRESHOLD) or taps (place
@@ -584,7 +600,7 @@ export function MapCanvas({
       window.removeEventListener("touchcancel", handleTouchEnd);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageWidth, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, tripDraft, regionDraft]);
+  }, [imageWidth, mode, calibrationStart, zoneDraft, lineDraft, landmassDraft, territoryDraft, tripDraft, regionDraft]);
 
   // Touch has no equivalent of Enter/Escape — a "Finish (N points)"/"Clear
   // points" bar covers every multi-point draft mode whenever there's at
@@ -598,7 +614,9 @@ export function MapCanvas({
         ? { count: lineDraft.length, min: 2, finish: () => { onLineDrawn(lineDraft); setLineDraft([]); }, clear: () => setLineDraft([]) }
         : mode === "paint-landmass"
           ? { count: landmassDraft.length, min: 3, finish: () => { onLandmassDrawn(landmassDraft); setLandmassDraft([]); }, clear: () => setLandmassDraft([]) }
-          : mode === "draw-trip"
+          : mode === "paint-territory"
+            ? { count: territoryDraft.length, min: 3, finish: () => { onTerritoryDrawn?.(territoryDraft); setTerritoryDraft([]); }, clear: () => setTerritoryDraft([]) }
+            : mode === "draw-trip"
             ? { count: tripDraft.length, min: 2, finish: () => { onTripDrawn(tripDraft); setTripDraft([]); }, clear: () => setTripDraft([]) }
             : mode === "select-region"
               ? { count: regionDraft.length, min: 3, finish: () => { onRegionDrawn?.(regionDraft); setRegionDraft([]); }, clear: () => setRegionDraft([]) }
@@ -648,6 +666,16 @@ export function MapCanvas({
             <polyline points={landmassDraft.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#fff" strokeDasharray="4,2" strokeWidth={2} />
             {landmassDraft.map((p, i) => (
               <circle key={i} cx={p.x} cy={p.y} r={4} fill="#fff" stroke="#000" strokeWidth={1.5} />
+            ))}
+          </g>
+        )}
+
+        {mode === "paint-territory" && territoryDraft.length > 0 && (
+          <g>
+            <polyline points={territoryDraft.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#000" strokeWidth={4} />
+            <polyline points={territoryDraft.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#7c8cff" strokeDasharray="4,2" strokeWidth={2} />
+            {territoryDraft.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={4} fill="#7c8cff" stroke="#000" strokeWidth={1.5} />
             ))}
           </g>
         )}

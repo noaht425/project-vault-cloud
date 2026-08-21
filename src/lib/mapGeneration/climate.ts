@@ -382,7 +382,7 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
   for (const biome of BIOME_DEFINITIONS) {
     const polygons = traceRegionBoundaries(cols, rows, (x, y) => biomeAt[y][x] === biome.id)
       .filter((loop) => signedPolygonArea(loop) > 0)
-      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 2))
+      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 3))
       .filter((poly) => polygonArea(poly) >= MIN_CLIMATE_ZONE_AREA_FRACTION * totalPixelArea)
     for (const points of polygons) {
       usedBiomeIds.add(biome.id)

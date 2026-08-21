@@ -498,16 +498,14 @@ export function MapGenerationPanel({
         settlementCount,
         boundaryMask: activeBoundaryMask,
       });
-      // Territories are entirely generated content today (there's no
-      // manual "paint a territory" tool), so unlike lines/zones there's no
-      // hand-drawn territory to preserve — but with an active boundary
-      // mask, a territory OUTSIDE it from a previous (whole-map or
-      // differently-scoped) run must still survive; only ones inside the
-      // current mask get replaced. Pins mix freely with hand-placed ones,
-      // so those filter by generated:true AND scope, same as every other
-      // section.
+      // Territories can now be hand-drawn too (Draw Territory, MapForm.tsx),
+      // so — same as every other layer — only ever replaces entries this
+      // generator itself previously produced (generated:true) AND that fall
+      // inside the active boundary mask; a hand-drawn territory, or a
+      // generated one outside the current mask from a previous run, always
+      // survives.
       const keptPins = data.pins.filter((p) => !p.generated || !isInScope([{ x: p.x, y: p.y }], activeBoundaryMask));
-      const keptTerritories = data.territories.filter((t) => !isInScope(t.points, activeBoundaryMask));
+      const keptTerritories = data.territories.filter((t) => !t.generated || !isInScope(t.points, activeBoundaryMask));
       updateFrontmatter({
         pins: [...keptPins, ...result.pins],
         territories: [...keptTerritories, ...result.territories],

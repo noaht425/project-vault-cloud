@@ -67,7 +67,7 @@ describe('generateTerrain', () => {
     // "off-land" for the wrong reason.
     const width = 800
     const height = 800
-    const gridResolution = 48
+    const gridResolution = 96 // matches computeElevationGrid's own default
     const tolerancePx = (Math.max(width, height) / gridResolution) * 3
     for (const seed of [1, 2, 3, 4, 5]) {
       const result = generateTerrain({ seed, widthPixels: width, heightPixels: height, mountainDensity: 0.9, mountainRuggedness: 0.9, seaLevel: 0.4 }, idSequence())

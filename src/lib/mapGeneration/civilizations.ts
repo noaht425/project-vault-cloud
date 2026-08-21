@@ -173,7 +173,7 @@ export function generateCivilizations(params: CivilizationGenerationParams, idFa
   for (let civIndex = 0; civIndex < capitals.length; civIndex++) {
     const polygons = traceRegionBoundaries(cols, rows, (x, y) => owner[y][x] === civIndex)
       .filter((loop) => signedPolygonArea(loop) > 0)
-      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 2))
+      .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 3))
       .filter((poly) => polygonArea(poly) >= territoryMinAreaFraction * totalPixelArea)
 
     const namingStyle = civilizationNamingStyle(civIndex)
