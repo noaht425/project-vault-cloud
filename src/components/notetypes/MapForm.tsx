@@ -2,10 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { mapFrontmatterSchema, type LineType, type MapLandmass, type MapLine, type MapZone, type TerrainType } from "@/lib/noteTypes/map";
-import { crossingTime, deriveEquatorY, deriveScaleFromLatitudeSpan, foldDrawnPathAtWraps, type Point } from "@/lib/mapGeometry";
+import { mapFrontmatterSchema, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType } from "@/lib/noteTypes/map";
+import { crossingTime, deriveEquatorY, deriveScaleFromLatitudeSpan, foldDrawnPathAtWraps, pointInPolygon, type Point } from "@/lib/mapGeometry";
 import { uploadMapImage, getMapImageUrl } from "@/lib/mapImageStorage";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
+import { defaultSettlementFrontmatter } from "@/lib/noteTypes/settlement";
+import { presetFieldsFromPreset, settlementPresetFrontmatterSchema } from "@/lib/noteTypes/settlementPreset";
+import { generateSettlement } from "@/lib/settlementGenerator";
+import { NAME_INSPIRATION_SOURCES } from "@/lib/settlementNames";
+import { PHONETIC_PROFILES } from "@/lib/phoneticNames";
 import { TextField } from "@/components/ui/TextField";
 import { Button } from "@/components/ui/Button";
 import { MapCanvas, type MapCanvasMode } from "./map/MapCanvas";
@@ -26,6 +31,18 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(body?.error ?? `Request failed (${res.status})`);
   }
   return res.json();
+}
+
+// Same "exact case-insensitive title match, then fetch the full note" shape
+// as SettlementSetupTab.tsx's own findNoteByExactTitle — used here to look
+// up a territory's assigned settlement-preset note by title.
+async function findNoteByExactTitle(title: string, type?: string): Promise<{ id: string; frontmatter: Record<string, unknown> } | null> {
+  const params = new URLSearchParams({ q: title });
+  if (type) params.set("type", type);
+  const matches = await fetchJson<NoteSummary[]>(`/api/notes?${params}`).catch(() => []);
+  const id = resolveWikiLinkTitle(matches, title);
+  if (!id) return null;
+  return fetchJson<{ id: string; frontmatter: Record<string, unknown> }>(`/api/notes/${id}`).catch(() => null);
 }
 
 function loadImageDimensions(url: string): Promise<{ width: number; height: number }> {
@@ -90,6 +107,9 @@ export function MapForm({
   const [pendingPinPoint, setPendingPinPoint] = useState<Point | null>(null);
   const [pinQuery, setPinQuery] = useState("");
   const [pinResults, setPinResults] = useState<{ title: string }[]>([]);
+
+  const [generatingSettlementPinId, setGeneratingSettlementPinId] = useState<string | null>(null);
+  const [settlementGenError, setSettlementGenError] = useState<string | null>(null);
 
   const [highlightedPinIds, setHighlightedPinIds] = useState<Set<string>>(new Set());
   const [drawnTripPath, setDrawnTripPath] = useState<Point[] | null>(null);
@@ -241,6 +261,60 @@ export function MapForm({
   const cancelPin = () => {
     setPendingPinPoint(null);
     setMode("view");
+  };
+
+  // "Generate settlement from pin" (map generation plan, Phase 4): a
+  // generated-but-unlinked pin (a placeholder city name dropped by the
+  // Civilizations generator, see civilizations.ts) becomes a real Settlement
+  // note. Which settlement-preset note to generate FROM is resolved from
+  // whichever territory polygon this pin falls inside — see the Civilizations
+  // section's per-territory preset picker in MapGenerationPanel.tsx, which is
+  // exactly what feeds presetNoteTitle here.
+  const generateSettlementFromPin = async (pin: MapPin) => {
+    setSettlementGenError(null);
+    const territory = data.territories.find((t) => pointInPolygon({ x: pin.x, y: pin.y }, t.points));
+    if (!territory?.presetNoteTitle) {
+      setSettlementGenError(`"${pin.label}" isn't inside a territory with a settlement preset assigned yet — assign one in the Generate panel's Civilizations section.`);
+      return;
+    }
+    setGeneratingSettlementPinId(pin.id);
+    try {
+      const note = await findNoteByExactTitle(territory.presetNoteTitle, "settlement-preset");
+      if (!note) throw new Error(`Settlement preset "${territory.presetNoteTitle}" no longer exists.`);
+      const parsed = settlementPresetFrontmatterSchema.safeParse(note.frontmatter);
+      if (!parsed.success) throw new Error(`"${territory.presetNoteTitle}" doesn't look like a valid settlement preset.`);
+
+      // presetFieldsFromPreset carries targetPopulation (the preset's own
+      // field name) but generateSettlement's GenerationOptions calls the
+      // same concept population — split it out rather than leaning on
+      // spread's excess-property leniency.
+      const presetFields = presetFieldsFromPreset(parsed.data);
+      const { targetPopulation, ...forGeneration } = presetFields;
+      const result = generateSettlement({
+        ...forGeneration,
+        population: targetPopulation,
+        inspirationSources: NAME_INSPIRATION_SOURCES,
+        phoneticProfiles: PHONETIC_PROFILES,
+      });
+
+      const res = await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: pin.label.trim() || "Generated Settlement",
+          folderId: null,
+          frontmatter: { ...defaultSettlementFrontmatter(), ...presetFields, buildings: result.buildings, residents: result.residents, factions: result.factions },
+        }),
+      });
+      const created = await res.json();
+      if (!res.ok) throw new Error(created.error ?? "Could not create the settlement note");
+
+      updateFrontmatter({ pins: data.pins.map((p) => (p.id === pin.id ? { ...p, locationTitle: created.name as string } : p)) });
+    } catch (err) {
+      setSettlementGenError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingSettlementPinId(null);
+    }
   };
 
   const openLocationNote = async (title: string) => {
@@ -726,12 +800,22 @@ export function MapForm({
             ) : (
               <div key={pin.id} className="flex items-center gap-1.5 text-sm mt-1">
                 <span className="opacity-70">{pin.label} (no note)</span>
+                {pin.generated && (
+                  <button
+                    className="text-left bg-transparent border-0 cursor-pointer p-0 text-accent underline disabled:opacity-50 disabled:cursor-default"
+                    disabled={generatingSettlementPinId === pin.id}
+                    onClick={() => void generateSettlementFromPin(pin)}
+                  >
+                    {generatingSettlementPinId === pin.id ? "Generating…" : "Generate settlement"}
+                  </button>
+                )}
                 <button className="text-muted hover:text-danger bg-transparent border-0 cursor-pointer px-1" onClick={() => removePin(pin.id)}>
                   ✕
                 </button>
               </div>
             )
           )}
+          {settlementGenError && <p className="text-sm text-danger mt-1.5">{settlementGenError}</p>}
         </details>
       )}
 
