@@ -130,7 +130,24 @@ export interface TerrainGenerationResult {
 // producing an "orphaned" mountain zone with no land underneath it at all.
 const MIN_LANDMASS_AREA_FRACTION = 0.002
 const MIN_MOUNTAIN_AREA_FRACTION = MIN_LANDMASS_AREA_FRACTION
-const MOUNTAIN_ELEVATION_THRESHOLD = 0.8
+// Exported so other generators (civilizations.ts's settlement-site scoring
+// and territory-growth cost, roads.ts's pathing cost) agree with elevation.ts
+// on exactly what counts as "mountainous" rather than each redefining a
+// slightly different cutoff.
+export const MOUNTAIN_ELEVATION_THRESHOLD = 0.8
+
+// A simple three-band cost-to-cross multiplier derived from elevation
+// alone — shared by civilizations.ts's territory-growth flood fill and
+// roads.ts's pathfinding, so a mountain range costs the same to expand
+// across as it does to build a road across (matching mapGeometry.ts's own
+// "terrain has a speedMultiplier" idea, just expressed as elevation-driven
+// difficulty instead of a painted zone's own value, since generation runs
+// before any zone exists to look up).
+export function terrainDifficulty(elevationValue: number): number {
+  if (elevationValue >= MOUNTAIN_ELEVATION_THRESHOLD) return 4
+  if (elevationValue >= 0.65) return 2
+  return 1
+}
 
 export function generateTerrain(params: TerrainGenerationParams, idFactory: () => string = () => crypto.randomUUID()): TerrainGenerationResult {
   const { widthPixels, heightPixels, seaLevel = 0.5, mountainTerrainTypeId = 'mountains', boundaryMask = null } = params

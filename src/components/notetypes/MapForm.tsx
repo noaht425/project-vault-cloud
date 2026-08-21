@@ -287,6 +287,7 @@ export function MapForm({
   const [showLines, setShowLines] = useState(true);
   const [showPins, setShowPins] = useState(true);
   const [showClimateZones, setShowClimateZones] = useState(true);
+  const [showTerritories, setShowTerritories] = useState(true);
   const [canvasWidthInput, setCanvasWidthInput] = useState("1000");
   const [canvasHeightInput, setCanvasHeightInput] = useState("1000");
 
@@ -429,6 +430,10 @@ export function MapForm({
               <input type="checkbox" checked={showClimateZones} onChange={(e) => setShowClimateZones(e.target.checked)} />
               Climate
             </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={showTerritories} onChange={(e) => setShowTerritories(e.target.checked)} />
+              Territories
+            </label>
           </div>
 
           {/* Taller on desktop — a fixed mobile-sized height left most of a
@@ -446,6 +451,7 @@ export function MapForm({
               lineTypes={data.lineTypes}
               climateZones={data.climateZones}
               climateTypes={data.climateTypes}
+              territories={data.territories}
               mode={mode}
               onCalibrate={setPendingPixelDistance}
               onZoneDrawn={setPendingZonePoints}
@@ -476,6 +482,7 @@ export function MapForm({
               showLines={showLines}
               showPins={showPins}
               showClimateZones={showClimateZones}
+              showTerritories={showTerritories}
             />
           </div>
 

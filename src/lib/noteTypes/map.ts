@@ -149,6 +149,13 @@ export const territorySchema = z.object({
   id: z.string(),
   name: z.string().catch(''),
   points: z.array(pointSchema),
+  // Same purpose as terrainTypeSchema/climateTypeSchema's own color field —
+  // added here a beat later since territories didn't exist as a real,
+  // renderable layer until Phase 3 (Phase 0 only reserved the schema
+  // shape). Catches to a generic slate so an old territory that predates
+  // this field still renders as something instead of the '#888' fallback
+  // every other color lookup already uses.
+  color: z.string().catch('#8899aa'),
   presetNoteTitle: z.string().nullable().catch(null),
   // References a mapPinSchema.id on this same map, not a note — the capital
   // is just which of this territory's own pins is the seat of power, same

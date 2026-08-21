@@ -12,11 +12,22 @@ import type { ClimateType, ClimateZone, MapLandmass, MapLine, MapZone } from '..
 import { generateTerrain, type TerrainGenerationParams, type TerrainGenerationResult } from './elevation'
 import { generateRivers, type HydrologyGenerationParams } from './hydrology'
 import { generateClimate, type ClimateGenerationParams, type ClimateGenerationResult } from './climate'
+import { generateCivilizations, type CivilizationGenerationParams, type CivilizationGenerationResult } from './civilizations'
+import { generateRoads, type RoadGenerationParams } from './roads'
 
-export { generateTerrain, generateRivers, generateClimate }
-export type { TerrainGenerationParams, TerrainGenerationResult, HydrologyGenerationParams, ClimateGenerationParams, ClimateGenerationResult }
+export { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads }
+export type {
+  TerrainGenerationParams,
+  TerrainGenerationResult,
+  HydrologyGenerationParams,
+  ClimateGenerationParams,
+  ClimateGenerationResult,
+  CivilizationGenerationParams,
+  CivilizationGenerationResult,
+  RoadGenerationParams
+}
 
-export type GenerationParams = TerrainGenerationParams & HydrologyGenerationParams & ClimateGenerationParams
+export type GenerationParams = TerrainGenerationParams & HydrologyGenerationParams & ClimateGenerationParams & CivilizationGenerationParams & RoadGenerationParams
 
 export interface GenerateMapResult {
   landmasses: MapLandmass[]
@@ -26,6 +37,12 @@ export interface GenerateMapResult {
   climateZones: ClimateZone[]
 }
 
+// civilizations/roads aren't included here: generateRoads needs the actual
+// settlement pixel positions civilizations.ts just produced as an input,
+// so those two are inherently a two-step call (generateCivilizations, then
+// generateRoads with its pins) rather than fitting this single-params-in
+// shape — the UI's Civilizations and Roads panel sections call them
+// directly in that order instead of through this convenience function.
 export function generateMap(params: GenerationParams, idFactory?: () => string): GenerateMapResult {
   const terrain = generateTerrain(params, idFactory)
   const rivers = generateRivers(params, idFactory)

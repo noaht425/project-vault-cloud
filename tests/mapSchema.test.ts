@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mapFrontmatterSchema, mapLineSchema, mapPinSchema, mapZoneSchema, mapLandmassSchema, defaultMapFrontmatter } from '../src/lib/noteTypes/map'
+import { mapFrontmatterSchema, mapLineSchema, mapPinSchema, mapZoneSchema, mapLandmassSchema, territorySchema, defaultMapFrontmatter } from '../src/lib/noteTypes/map'
 
 describe('mapFrontmatterSchema backward compatibility', () => {
   it('parses a pre-generation map (no new fields at all) with safe defaults', () => {
@@ -51,5 +51,14 @@ describe('generated flag round-trips explicitly on every generatable layer', () 
 
     const landmass = mapLandmassSchema.parse({ id: 'lm1', name: 'New Continent', points: [], generated: true })
     expect(landmass.generated).toBe(true)
+  })
+
+  it('territories, including the color field defaulting for a pre-Phase-3 territory', () => {
+    const territory = territorySchema.parse({ id: 't1', name: 'Old Kingdom', points: [], generated: true })
+    expect(territory.generated).toBe(true)
+    expect(territory.color).toBe('#8899aa')
+
+    const withColor = territorySchema.parse({ id: 't2', name: 'New Kingdom', points: [], color: 'hsl(90, 45%, 45%)', generated: true })
+    expect(withColor.color).toBe('hsl(90, 45%, 45%)')
   })
 })

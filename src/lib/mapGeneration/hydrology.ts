@@ -9,44 +9,34 @@ import { pointInPolygon, type Point } from '../mapGeometry'
 import type { MapLine } from '../noteTypes/map'
 import { computeElevationGrid, type ElevationGridParams } from './elevation'
 
-export interface HydrologyGenerationParams extends ElevationGridParams {
-  seaLevel?: number
-  // 0-1 — higher means more, longer rivers (a lower flow-accumulation
-  // threshold to qualify). Default 0.5.
-  riverDensity?: number
-  riverLineTypeId?: string
-  riverWidthPixels?: number
-  boundaryMask?: Point[] | null
-}
-
 const NEIGHBOR_OFFSETS: Point[] = [
   { x: -1, y: -1 }, { x: 0, y: -1 }, { x: 1, y: -1 },
   { x: -1, y: 0 }, { x: 1, y: 0 },
   { x: -1, y: 1 }, { x: 0, y: 1 }, { x: 1, y: 1 }
 ]
 
-// A river shorter than this many points is treated as noise (a stray
-// one-cell trickle) rather than a real waterway worth drawing.
-const MIN_RIVER_POINTS = 4
+export interface FlowAccumulationResult {
+  // flowTarget[y][x] is the single downhill neighbor a land cell drains
+  // into (steepest descent, D8), or null for a non-land cell or a local
+  // minimum (a landlocked basin's bottom).
+  flowTarget: (Point | null)[][]
+  // accumulation[y][x] is 1 (itself) plus every upstream cell's own
+  // accumulation — effectively "how much land drains through here",
+  // which is what both river-threshold and settlement-site scoring read.
+  accumulation: number[][]
+  // Every land cell, sorted highest elevation first — the order
+  // accumulation was computed in, reused by callers that need the same
+  // "resolve high ground before low ground" traversal (e.g. tracing river
+  // sources biggest-drainage-first).
+  landCellsHighToLow: Point[]
+}
 
-export function generateRivers(params: HydrologyGenerationParams, idFactory: () => string = () => crypto.randomUUID()): MapLine[] {
-  const { seaLevel = 0.5, riverDensity = 0.5, riverLineTypeId = 'river', riverWidthPixels = 10, boundaryMask = null } = params
-  const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
-
-  const hasMask = boundaryMask !== null && boundaryMask.length >= 3
-  const insideMask = (x: number, y: number): boolean => {
-    if (!hasMask) return true
-    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
-    return pointInPolygon(centerPx, boundaryMask as Point[])
-  }
-  const isLandCell = (x: number, y: number): boolean => elevation[y][x] >= seaLevel && insideMask(x, y)
-
-  // Steepest-descent flow direction for every land cell — the single
-  // neighbor (8-connected) with the lowest elevation, or null if this cell
-  // is already a local minimum (a landlocked basin's bottom). Deliberately
-  // single-flow-direction (D8), not a multi-direction/D-infinity model —
-  // simpler, and the stylized-map look this is going for doesn't need
-  // hydrologically precise branching.
+// Shared by generateRivers here and civilizations.ts's settlement-site
+// scoring (river/coast adjacency) — both need to know how much drainage
+// area flows through a given cell, and computing it once with this shared
+// function guarantees they agree with each other rather than each
+// re-deriving a subtly different notion of "near a river."
+export function computeFlowAccumulation(elevation: number[][], cols: number, rows: number, isLandCell: (x: number, y: number) => boolean): FlowAccumulationResult {
   const flowTarget: (Point | null)[][] = []
   for (let y = 0; y < rows; y++) {
     const row: (Point | null)[] = []
@@ -71,12 +61,11 @@ export function generateRivers(params: HydrologyGenerationParams, idFactory: () 
     flowTarget.push(row)
   }
 
-  // Flow accumulation: process land cells from highest to lowest elevation
-  // so that by the time a cell is processed, every cell that flows INTO it
-  // has already contributed its own accumulation — a single downhill pass
-  // is enough, no iteration to convergence needed (this is the standard
-  // trick for D8 accumulation on a DAG — flow strictly decreases in
-  // elevation, so there are no cycles to worry about).
+  // Process land cells from highest to lowest elevation so that by the
+  // time a cell is processed, every cell that flows INTO it has already
+  // contributed its own accumulation — a single downhill pass is enough,
+  // no iteration to convergence needed (flow strictly decreases in
+  // elevation, so there's no cycle to resolve).
   const accumulation: number[][] = Array.from({ length: rows }, () => new Array(cols).fill(1))
   const landCellsHighToLow: Point[] = []
   for (let y = 0; y < rows; y++) {
@@ -89,6 +78,37 @@ export function generateRivers(params: HydrologyGenerationParams, idFactory: () 
     const target = flowTarget[y][x]
     if (target) accumulation[target.y][target.x] += accumulation[y][x]
   }
+
+  return { flowTarget, accumulation, landCellsHighToLow }
+}
+
+export interface HydrologyGenerationParams extends ElevationGridParams {
+  seaLevel?: number
+  // 0-1 — higher means more, longer rivers (a lower flow-accumulation
+  // threshold to qualify). Default 0.5.
+  riverDensity?: number
+  riverLineTypeId?: string
+  riverWidthPixels?: number
+  boundaryMask?: Point[] | null
+}
+
+// A river shorter than this many points is treated as noise (a stray
+// one-cell trickle) rather than a real waterway worth drawing.
+const MIN_RIVER_POINTS = 4
+
+export function generateRivers(params: HydrologyGenerationParams, idFactory: () => string = () => crypto.randomUUID()): MapLine[] {
+  const { seaLevel = 0.5, riverDensity = 0.5, riverLineTypeId = 'river', riverWidthPixels = 10, boundaryMask = null } = params
+  const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
+
+  const hasMask = boundaryMask !== null && boundaryMask.length >= 3
+  const insideMask = (x: number, y: number): boolean => {
+    if (!hasMask) return true
+    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+    return pointInPolygon(centerPx, boundaryMask as Point[])
+  }
+  const isLandCell = (x: number, y: number): boolean => elevation[y][x] >= seaLevel && insideMask(x, y)
+
+  const { flowTarget, accumulation, landCellsHighToLow } = computeFlowAccumulation(elevation, cols, rows, isLandCell)
 
   // riverDensity=0 -> only the highest-accumulation drainage lines qualify
   // (few, long rivers); riverDensity=1 -> almost any land cell with more
@@ -108,11 +128,6 @@ export function generateRivers(params: HydrologyGenerationParams, idFactory: () 
   // it already did. Without this, every single cell along an already-
   // traced river's course would independently start its own (fully
   // redundant, overlapping) path.
-  const incomingCount: number[][] = Array.from({ length: rows }, () => new Array(cols).fill(0))
-  for (const { x, y } of landCellsHighToLow) {
-    const target = flowTarget[y][x]
-    if (target) incomingCount[target.y][target.x]++
-  }
   const flowsInFromQualifying = (x: number, y: number): boolean => {
     for (const offset of NEIGHBOR_OFFSETS) {
       const nx = x + offset.x
