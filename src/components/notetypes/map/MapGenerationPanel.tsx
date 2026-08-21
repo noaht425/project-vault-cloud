@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { z } from "zod";
 import { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads } from "@/lib/mapGeneration/generateMap";
-import type { WindDirection } from "@/lib/mapGeneration/climate";
+import { BIOME_DEFINITIONS, type ClimateAnchor, type WindDirection } from "@/lib/mapGeneration/climate";
 import { defaultLineTypes, defaultMapFrontmatter, defaultTerrainTypes, type LineType, type MapFrontmatter, type MapLandmass, type MapPin, type TerrainType } from "@/lib/noteTypes/map";
 import { generatePlaceName, resolvePlaceNameStyle, PLACE_NAME_STYLES } from "@/lib/placeNames";
 import { boundingBoxOf, deriveEquatorY, deriveScaleFromLatitudeSpan, latitudeRadiansAt, pointInPolygon, polygonCentroid, type Point } from "@/lib/mapGeometry";
@@ -63,6 +64,59 @@ function resolveRoadLineType(lineTypes: LineType[]): { id: string; newType: Line
 }
 
 const WIND_DIRECTIONS: WindDirection[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+const KNOWN_BIOME_IDS = new Set<string>(BIOME_DEFINITIONS.map((b) => b.id));
+
+// Same "search by title, exact-match, fetch the full note" shape as
+// MapForm.tsx's own findNoteByExactTitle (not exported from there, so
+// duplicated rather than imported across component files) — used here to
+// resolve a pin's linked note, then that note's own linked climate note.
+async function findNoteByExactTitle(title: string, type?: string): Promise<{ frontmatter: Record<string, unknown> } | null> {
+  const params = new URLSearchParams({ q: title });
+  if (type) params.set("type", type);
+  const searchRes = await fetch(`/api/notes?${params}`);
+  if (!searchRes.ok) return null;
+  const matches: { id: string; name: string }[] = await searchRes.json();
+  const id = resolveWikiLinkTitle(matches, title);
+  if (!id) return null;
+  const noteRes = await fetch(`/api/notes/${id}`);
+  if (!noteRes.ok) return null;
+  return noteRes.json();
+}
+
+// A Location or Settlement note's own climateNoteTitle field — read via a
+// minimal passthrough schema (not the full locationFrontmatterSchema/
+// settlementFrontmatterSchema) since only this one field is needed and a
+// pin's linked note could be either type.
+const placeClimateRefSchema = z.object({ climateNoteTitle: z.string().nullable().catch(null) }).passthrough();
+
+// Climate anchors (map generation plan's climate-anchoring follow-up to
+// Phase 6): resolves every pin already linked to a real note, follows its
+// climateNoteTitle to a climate note, and reads that note's own biomeId
+// (see noteTypes/climate.ts) — a settlement/kingdom whose climate the user
+// already researched becomes a ground-truth point the procedural climate
+// generator blends toward (see mapGeneration/climate.ts's
+// blendTowardAnchors) instead of picking one at random. A pin with no
+// linked note, a note with no climateNoteTitle, or a climate note with no
+// biomeId set simply contributes no anchor — this is opt-in per pin, with
+// zero effect on a map that doesn't use it.
+async function resolveClimateAnchors(pins: MapPin[]): Promise<ClimateAnchor[]> {
+  const anchors: ClimateAnchor[] = [];
+  for (const pin of pins) {
+    if (!pin.locationTitle) continue;
+    const place = await findNoteByExactTitle(pin.locationTitle).catch(() => null);
+    if (!place) continue;
+    const parsedPlace = placeClimateRefSchema.safeParse(place.frontmatter);
+    const climateNoteTitle = parsedPlace.success ? parsedPlace.data.climateNoteTitle : null;
+    if (!climateNoteTitle) continue;
+    const climateNote = await findNoteByExactTitle(climateNoteTitle, "climate").catch(() => null);
+    if (!climateNote) continue;
+    const biomeId = typeof climateNote.frontmatter.biomeId === "string" ? climateNote.frontmatter.biomeId : null;
+    if (!biomeId || !KNOWN_BIOME_IDS.has(biomeId)) continue;
+    anchors.push({ x: pin.x, y: pin.y, biomeId: biomeId as ClimateAnchor["biomeId"] });
+  }
+  return anchors;
+}
 
 // Whether a previously-generated shape (given as its own points, zone/
 // landmass/territory polygon or line) should be treated as "inside the area
@@ -127,7 +181,9 @@ export function MapGenerationPanel({
 
   const [moistureScale, setMoistureScale] = useState(Number(savedParams.moistureScale ?? 0.4));
   const [prevailingWindDirection, setPrevailingWindDirection] = useState<WindDirection>((savedParams.prevailingWindDirection as WindDirection) ?? "W");
+  const [anchorRadiusFraction, setAnchorRadiusFraction] = useState(Number(savedParams.anchorRadiusFraction ?? 0.15));
   const [generatingClimate, setGeneratingClimate] = useState(false);
+  const [climateAnchorError, setClimateAnchorError] = useState<string | null>(null);
 
   const [civilizationCount, setCivilizationCount] = useState(Number(savedParams.civilizationCount ?? 3));
   const [settlementCount, setSettlementCount] = useState(Number(savedParams.settlementCount ?? 9));
@@ -372,10 +428,20 @@ export function MapGenerationPanel({
     }
   };
 
-  const generateClimateNow = () => {
+  const generateClimateNow = async () => {
     if (!workingDims) return;
     setGeneratingClimate(true);
+    setClimateAnchorError(null);
     try {
+      // Resolved fresh on every run (not memoized against data.pins) since
+      // a settlement's own climate note — or its biomeId — can change
+      // between generation runs, and this only ever costs a handful of
+      // note fetches for pins that are actually linked.
+      const anchors = await resolveClimateAnchors(data.pins).catch((err) => {
+        setClimateAnchorError(err instanceof Error ? err.message : String(err));
+        return [];
+      });
+      const anchorRadiusPixels = anchors.length > 0 ? anchorRadiusFraction * Math.min(workingDims.width, workingDims.height) : 0;
       const result = generateClimate({
         seed,
         widthPixels: workingDims.width,
@@ -389,6 +455,8 @@ export function MapGenerationPanel({
         topLatitude: data.scaleMode === "latitude" ? data.topLatitude : null,
         bottomLatitude: data.scaleMode === "latitude" ? data.bottomLatitude : null,
         boundaryMask: activeBoundaryMask,
+        anchors,
+        anchorRadiusPixels,
       });
       const existingTypeIds = new Set(data.climateTypes.map((t) => t.id));
       const newTypes = result.climateTypes.filter((t) => !existingTypeIds.has(t.id));
@@ -396,7 +464,7 @@ export function MapGenerationPanel({
       updateFrontmatter({
         climateTypes: [...data.climateTypes, ...newTypes],
         climateZones: [...keptZones, ...result.climateZones],
-        generation: mergeGeneration({ moistureScale, prevailingWindDirection }),
+        generation: mergeGeneration({ moistureScale, prevailingWindDirection, anchorRadiusFraction }),
       });
     } finally {
       setGeneratingClimate(false);
@@ -655,9 +723,18 @@ export function MapGenerationPanel({
               ))}
             </select>
           </label>
-          <Button variant="primary" disabled={!workingDims || generatingClimate} onClick={generateClimateNow}>
+          <label className="flex flex-col gap-1 text-sm">
+            <span>
+              Climate anchor influence ({Math.round(anchorRadiusFraction * 100)}% of the map&apos;s size) — any pin linked to a note whose own
+              climate note has a Map biome set becomes a known-correct point nearby generation blends toward, fading smoothly into the
+              procedural climate further away. Pins with no such link have no effect.
+            </span>
+            <input type="range" min={0} max={0.5} step={0.01} value={anchorRadiusFraction} onChange={(e) => setAnchorRadiusFraction(Number(e.target.value))} />
+          </label>
+          <Button variant="primary" disabled={!workingDims || generatingClimate} onClick={() => void generateClimateNow()}>
             {generatingClimate ? "Generating…" : "Generate climate"}
           </Button>
+          {climateAnchorError && <p className="text-sm text-danger">Couldn&apos;t resolve some climate anchors: {climateAnchorError}</p>}
         </div>
 
         <div className="border-t border-border pt-3 flex flex-col gap-3">

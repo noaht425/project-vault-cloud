@@ -4,7 +4,7 @@
 // elevation (very high land reads as alpine regardless of latitude) — then
 // traces each biome's cells into zone polygons the same way elevation.ts
 // traces landmasses/mountains.
-import { pointInPolygon, type Point } from '../mapGeometry'
+import { pointInPolygon, segmentDistance, type Point } from '../mapGeometry'
 import type { ClimateType, ClimateZone } from '../noteTypes/map'
 import { fractalNoise2D } from './noise'
 import { computeElevationGrid, type ElevationGridParams } from './elevation'
@@ -41,6 +41,88 @@ export function classifyBiome(temperature: number, moisture: number, elevation: 
   if (temperature < 0.65) return moisture > 0.5 ? 'temperate-forest' : 'grassland'
   if (moisture < 0.35) return 'desert'
   return moisture < 0.65 ? 'savanna' : 'rainforest'
+}
+
+// Representative (temperature, moisture) at the midpoint of each biome's own
+// band in classifyBiome above — the "known-correct" value a settlement's
+// already-researched climate (see noteTypes/climate.ts's biomeId) pulls
+// nearby cells toward (see blendTowardAnchors), rather than stamping that
+// biome outright. Pulling the same inputs classifyBiome already uses (not
+// overriding its output) is what keeps a filled-in anchor climatically
+// consistent with its surroundings: a desert anchor near a taiga anchor
+// produces a believable savanna/grassland-ish gradient between them instead
+// of two hard-edged patches meeting at a seam, and a real elevation
+// constraint (very high land still reads as alpine) is never overridden by
+// a distant anchor's pull. Alpine has no true elevation-free representative
+// — its threshold is elevation, not temperature/moisture — so its target is
+// just "cold, moderate moisture": pulling nearby terrain toward tundra/taiga
+// if it isn't literally mountainous there, rather than forcing an alpine
+// reading onto flat land near a high-altitude anchor.
+export const BIOME_CLIMATE_TARGETS: Record<BiomeId, { temperature: number; moisture: number }> = {
+  tundra: { temperature: 0.15, moisture: 0.2 },
+  taiga: { temperature: 0.15, moisture: 0.7 },
+  grassland: { temperature: 0.475, moisture: 0.25 },
+  'temperate-forest': { temperature: 0.475, moisture: 0.75 },
+  desert: { temperature: 0.825, moisture: 0.15 },
+  savanna: { temperature: 0.825, moisture: 0.5 },
+  rainforest: { temperature: 0.825, moisture: 0.85 },
+  alpine: { temperature: 0.1, moisture: 0.5 }
+}
+
+export interface ClimateAnchor {
+  x: number
+  y: number
+  biomeId: BiomeId
+}
+
+// Smooth (zero-derivative-at-both-ends) falloff from 1 at distance 0 to 0 at
+// distance >= radiusPixels — the standard graphics "smoothstep" shape,
+// chosen so an anchor's pull tapers away gradually instead of leaving a
+// visible seam where its influence radius ends.
+function anchorInfluence(distance: number, radiusPixels: number): number {
+  if (radiusPixels <= 0) return 0
+  const t = Math.min(1, Math.max(0, distance / radiusPixels))
+  return 1 - t * t * (3 - 2 * t)
+}
+
+// Blends the naturally-computed temperature/moisture at one point toward
+// nearby anchors' own known-correct values — inverse-distance-weighted
+// across every anchor within range, so a point between two differently-
+// classified anchors gets pulled proportionally toward each rather than
+// snapping to whichever is merely nearest. Anchors beyond radiusPixels of a
+// given point contribute nothing, and a point with no anchor in range at
+// all passes its natural values through completely unchanged — this is what
+// keeps the whole mechanism additive: a map with no anchors (the case for
+// every map today) generates exactly as it did before this existed.
+export function blendTowardAnchors(
+  point: Point,
+  naturalTemperature: number,
+  naturalMoisture: number,
+  anchors: ClimateAnchor[],
+  radiusPixels: number
+): { temperature: number; moisture: number } {
+  let totalWeight = 0
+  let weightedTemperature = 0
+  let weightedMoisture = 0
+  for (const anchor of anchors) {
+    const weight = anchorInfluence(segmentDistance(point, anchor), radiusPixels)
+    if (weight <= 0) continue
+    const target = BIOME_CLIMATE_TARGETS[anchor.biomeId]
+    totalWeight += weight
+    weightedTemperature += weight * target.temperature
+    weightedMoisture += weight * target.moisture
+  }
+  if (totalWeight <= 0) return { temperature: naturalTemperature, moisture: naturalMoisture }
+  // Capped at 1 so heavy overlap between several anchors' radii can't pull
+  // a cell harder than any single anchor could on its own (full replacement
+  // is the strongest effect this ever has, right at an anchor's own point).
+  const pull = Math.min(1, totalWeight)
+  const anchorTemperature = weightedTemperature / totalWeight
+  const anchorMoisture = weightedMoisture / totalWeight
+  return {
+    temperature: naturalTemperature + (anchorTemperature - naturalTemperature) * pull,
+    moisture: naturalMoisture + (anchorMoisture - naturalMoisture) * pull
+  }
 }
 
 export type WindDirection = 'N' | 'S' | 'E' | 'W' | 'NE' | 'NW' | 'SE' | 'SW'
@@ -112,6 +194,15 @@ export interface ClimateGenerationParams extends ElevationGridParams {
   moistureScale?: number
   prevailingWindDirection?: WindDirection
   boundaryMask?: Point[] | null
+  // Known-correct climate points (e.g. a settlement whose linked climate
+  // note already has a biomeId set — see noteTypes/climate.ts) that pull
+  // nearby cells' temperature/moisture toward them before classification —
+  // see blendTowardAnchors. Empty/omitted has no effect (fully additive).
+  anchors?: ClimateAnchor[]
+  // In real pixels — how far an anchor's pull reaches before fading out
+  // completely. 0/omitted disables anchor blending entirely, regardless of
+  // whether anchors are passed.
+  anchorRadiusPixels?: number
 }
 
 export interface ClimateGenerationResult {
@@ -131,7 +222,9 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
     bottomLatitude = null,
     moistureScale = 0.4,
     prevailingWindDirection = 'W',
-    boundaryMask = null
+    boundaryMask = null,
+    anchors = [],
+    anchorRadiusPixels = 0
   } = params
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
 
@@ -171,8 +264,12 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
       }
       const baseMoisture = fractalNoise2D(seed + 314159, x, y, { scale: moistureFeatureScale, octaves: 4 })
       const shadow = computeRainShadowMultiplier(elevation, cols, rows, x, y, prevailingWindDirection)
-      const moisture = Math.max(0, Math.min(1, baseMoisture * shadow))
-      const temperature = Math.max(0, Math.min(1, (temperatureAt(y) + 1) / 2))
+      const naturalMoisture = Math.max(0, Math.min(1, baseMoisture * shadow))
+      const naturalTemperature = Math.max(0, Math.min(1, (temperatureAt(y) + 1) / 2))
+      const { temperature, moisture } =
+        anchors.length > 0 && anchorRadiusPixels > 0
+          ? blendTowardAnchors({ x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }, naturalTemperature, naturalMoisture, anchors, anchorRadiusPixels)
+          : { temperature: naturalTemperature, moisture: naturalMoisture }
       row.push(classifyBiome(temperature, moisture, elevation[y][x]))
     }
     biomeAt.push(row)

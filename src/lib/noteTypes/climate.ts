@@ -28,6 +28,18 @@ export const climateFrontmatterSchema = z
     summary: z.string().catch(""),
     calendarNoteTitle: z.string().catch(""),
     seasons: z.array(climateSeasonSchema).catch([]),
+    // One of mapGeneration/climate.ts's fixed BiomeId values (e.g.
+    // 'desert', 'tundra') — optional, null until set. Kept as a plain
+    // string here (not an imported literal union) so this note-types
+    // module doesn't depend on the map generation lib, same "resolved by
+    // lookup, not an enum" convention as terrainTypeId/climateTypeId
+    // elsewhere in noteTypes/map.ts. Lets a settlement/kingdom's own
+    // already-researched climate note act as a ground-truth anchor when
+    // the map's own procedural climate layer is generated near it (see the
+    // map generation plan's Phase 6 follow-up) — every existing climate
+    // note has this null, with zero effect until a map generation run
+    // actually resolves a pin to it.
+    biomeId: z.string().nullable().catch(null),
   })
   .passthrough();
 

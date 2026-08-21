@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { climateFrontmatterSchema } from "@/lib/noteTypes/climate";
+import { BIOME_DEFINITIONS } from "@/lib/mapGeneration/climate";
 import { TextField } from "@/components/ui/TextField";
 
 // Adapted from the Electron app's ClimateSheet.tsx. The seasons/weather
@@ -34,6 +35,21 @@ export function ClimateForm({
           — not editable here yet, but they won&apos;t be lost by editing the fields above.
         </p>
       )}
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm text-muted">
+          Map biome (optional) — if any settlement/kingdom linked to this climate note sits on a generated map, its pin
+          becomes a ground-truth anchor: nearby procedural climate generation is pulled toward this biome instead of
+          picking one at random, fading smoothly into the noise-driven climate further away.
+        </span>
+        <select value={data.biomeId ?? ""} onChange={(e) => onChange({ biomeId: e.target.value || null })}>
+          <option value="">Not set (no effect on map generation)</option>
+          {BIOME_DEFINITIONS.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }

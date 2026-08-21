@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBiome, computeRainShadowMultiplier, generateClimate } from '../src/lib/mapGeneration/climate'
+import { blendTowardAnchors, classifyBiome, computeRainShadowMultiplier, generateClimate, type ClimateAnchor } from '../src/lib/mapGeneration/climate'
 import { polygonArea } from '../src/lib/mapGeneration/contour'
+import { pointInPolygon } from '../src/lib/mapGeometry'
 
 function idSequence(): () => string {
   let n = 0
@@ -63,6 +64,43 @@ describe('computeRainShadowMultiplier', () => {
   })
 })
 
+describe('blendTowardAnchors', () => {
+  it('passes natural values through unchanged with no anchors in range', () => {
+    expect(blendTowardAnchors({ x: 0, y: 0 }, 0.5, 0.5, [], 100)).toEqual({ temperature: 0.5, moisture: 0.5 })
+    expect(blendTowardAnchors({ x: 0, y: 0 }, 0.5, 0.5, [{ x: 1000, y: 1000, biomeId: 'desert' }], 100)).toEqual({ temperature: 0.5, moisture: 0.5 })
+  })
+
+  it('fully replaces natural values with the anchor target exactly at the anchor point', () => {
+    const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'desert' }]
+    const result = blendTowardAnchors({ x: 0, y: 0 }, 0.1, 0.9, anchors, 100)
+    expect(result.temperature).toBeCloseTo(0.825, 5)
+    expect(result.moisture).toBeCloseTo(0.15, 5)
+  })
+
+  it('tapers smoothly with distance instead of a hard cutoff', () => {
+    const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'desert' }]
+    const near = blendTowardAnchors({ x: 20, y: 0 }, 0.1, 0.9, anchors, 100)
+    const mid = blendTowardAnchors({ x: 50, y: 0 }, 0.1, 0.9, anchors, 100)
+    const far = blendTowardAnchors({ x: 90, y: 0 }, 0.1, 0.9, anchors, 100)
+    // Monotonically approaches the natural value as distance grows.
+    expect(near.temperature).toBeGreaterThan(mid.temperature)
+    expect(mid.temperature).toBeGreaterThan(far.temperature)
+    expect(far.temperature).toBeGreaterThan(0.1)
+  })
+
+  it('blends two differently-classified anchors proportionally to distance, rather than snapping to the nearer one', () => {
+    const anchors: ClimateAnchor[] = [
+      { x: 0, y: 0, biomeId: 'desert' }, // hot/dry
+      { x: 100, y: 0, biomeId: 'tundra' } // cold/dry
+    ]
+    const midpoint = blendTowardAnchors({ x: 50, y: 0 }, 0.5, 0.5, anchors, 100)
+    // Roughly halfway between desert's 0.825 and tundra's 0.15 temperature —
+    // not equal to either endpoint, confirming a real blend occurred.
+    expect(midpoint.temperature).toBeGreaterThan(0.3)
+    expect(midpoint.temperature).toBeLessThan(0.65)
+  })
+})
+
 describe('generateClimate', () => {
   it('is deterministic for the same seed and params', () => {
     const params = { seed: 12, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, topLatitude: 60, bottomLatitude: -20 }
@@ -118,6 +156,25 @@ describe('generateClimate', () => {
         expect(p.y).toBeLessThanOrEqual(401)
       }
     }
+  })
+
+  it('an anchor pulls the classified biome at its own location to match, even against a strong opposing natural signal', () => {
+    // Equatorial band (hot) with an 'tundra' anchor planted right in the
+    // middle of it — without the anchor this point would classify hot
+    // (desert/savanna/rainforest); with it, the anchor's pull should win at
+    // its own exact location.
+    const base = { seed: 21, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.2, topLatitude: 10, bottomLatitude: -10 }
+    const anchorPoint = { x: 500, y: 500, biomeId: 'tundra' as const }
+    const result = generateClimate({ ...base, anchors: [anchorPoint], anchorRadiusPixels: 150 }, idSequence())
+    const zoneContainingAnchor = result.climateZones.find((z) => polygonArea(z.points) > 0 && pointInPolygon(anchorPoint, z.points))
+    expect(zoneContainingAnchor?.climateTypeId).toBe('tundra')
+  })
+
+  it('with no anchors, behaves exactly as before (same output as the pre-anchor call shape)', () => {
+    const params = { seed: 12, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, topLatitude: 60, bottomLatitude: -20 }
+    const withoutAnchorsField = generateClimate(params, idSequence())
+    const withEmptyAnchors = generateClimate({ ...params, anchors: [], anchorRadiusPixels: 0 }, idSequence())
+    expect(withEmptyAnchors.climateZones.map((z) => z.points)).toEqual(withoutAnchorsField.climateZones.map((z) => z.points))
   })
 
   it('never emits a zero-or-negative-area zone', () => {
