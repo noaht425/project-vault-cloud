@@ -31,7 +31,17 @@ export const terrainTypeSchema = z.object({
   color: z.string().catch('#4caf6e'),
   // Multiplies a travel mode's base speed while crossing this terrain — 1 is
   // normal, <1 slower, >1 faster, 0 impassable (see mapGeometry.calculateTrip).
-  speedMultiplier: z.coerce.number().catch(1)
+  speedMultiplier: z.coerce.number().catch(1),
+  // Optional, null by default (no effect). When set, any hand-painted zone
+  // of this terrain type is treated by the climate generator as real,
+  // known-elevated ground — 0 (sea level) to 1 (highest peaks), same scale
+  // as the generator's own internal elevation field. Lets your own painted
+  // Mountains/Hills zones inform the climate layer's alpine gate and rain-
+  // shadow moisture the same way a linked settlement's climate anchor
+  // does, instead of the climate layer inventing its own, unrelated
+  // elevation from noise alone. Irrelevant for line types (which reuse this
+  // same schema) — the climate generator only ever reads it off zones.
+  climateElevationOverride: z.coerce.number().min(0).max(1).nullable().catch(null)
 })
 
 export const mapZoneSchema = z.object({
@@ -302,8 +312,11 @@ export type GenerationConfig = z.infer<typeof generationConfigSchema>
 // travel mode's normal (1x) speed.
 export function defaultTerrainTypes(): TerrainType[] {
   return [
-    { id: 'mountains', name: 'Mountains', color: '#8a7a6d', speedMultiplier: 0.33 },
-    { id: 'forest', name: 'Forest', color: '#3f7a4e', speedMultiplier: 0.5 }
+    // 0.85 matches mapGeneration/climate.ts's own BIOME_ELEVATION_TARGETS.alpine
+    // — so a map's seeded "Mountains" terrain type informs climate generation
+    // out of the box, with no extra setup needed for the common case.
+    { id: 'mountains', name: 'Mountains', color: '#8a7a6d', speedMultiplier: 0.33, climateElevationOverride: 0.85 },
+    { id: 'forest', name: 'Forest', color: '#3f7a4e', speedMultiplier: 0.5, climateElevationOverride: null }
   ]
 }
 
@@ -312,12 +325,15 @@ export function defaultTerrainTypes(): TerrainType[] {
 // how a drawn line still factors into the same distance/time math as a zone.
 export function defaultLineTypes(): LineType[] {
   return [
-    { id: 'road', name: 'Road', color: '#c9a24d', speedMultiplier: 1.5 },
-    { id: 'path', name: 'Path', color: '#a68a5b', speedMultiplier: 1.2 },
+    // climateElevationOverride is meaningless for a line type (the climate
+    // generator only ever reads it off zones) — null here just satisfies
+    // the shared schema's shape, same as every other line type.
+    { id: 'road', name: 'Road', color: '#c9a24d', speedMultiplier: 1.5, climateElevationOverride: null },
+    { id: 'path', name: 'Path', color: '#a68a5b', speedMultiplier: 1.2, climateElevationOverride: null },
     // ~5x slower — assumes fording on foot. Flip above 1x instead if a
     // river represents traveling *by boat along* it rather than crossing
     // it, or set to 0 to make it a hard barrier without a bridge/boat.
-    { id: 'river', name: 'River', color: '#3c8fe0', speedMultiplier: 0.2 }
+    { id: 'river', name: 'River', color: '#3c8fe0', speedMultiplier: 0.2, climateElevationOverride: null }
   ]
 }
 

@@ -196,12 +196,12 @@ describe('zonesIncludingLines', () => {
 
 describe('calculateTrip', () => {
   const terrainTypes: TerrainType[] = [
-    { id: 'forest', name: 'Forest', color: '#4caf6e', speedMultiplier: 0.5 },
-    { id: 'meadow', name: 'Meadow', color: '#d9534f', speedMultiplier: 1.5 }
+    { id: 'forest', name: 'Forest', color: '#4caf6e', speedMultiplier: 0.5, climateElevationOverride: null },
+    { id: 'meadow', name: 'Meadow', color: '#d9534f', speedMultiplier: 1.5, climateElevationOverride: null }
   ]
   const lineTypes: LineType[] = [
-    { id: 'road', name: 'Road', color: '#c9a24d', speedMultiplier: 1.5 },
-    { id: 'river', name: 'River', color: '#3c8fe0', speedMultiplier: 0.2 }
+    { id: 'road', name: 'Road', color: '#c9a24d', speedMultiplier: 1.5, climateElevationOverride: null },
+    { id: 'river', name: 'River', color: '#3c8fe0', speedMultiplier: 0.2, climateElevationOverride: null }
   ]
   const scale = { pixelDistance: 100, realDistance: 10, unit: 'miles' }
   const walking: TravelMode = { id: 'walk', name: 'Walking', speed: 2, timeUnitLabel: 'hours' }
@@ -302,7 +302,7 @@ describe('calculateTrip', () => {
   })
 
   it('applies the chosen water terrain multiplier outside a landmass, and normal speed inside it', () => {
-    const oceanTerrainTypes: TerrainType[] = [...terrainTypes, { id: 'ocean', name: 'Ocean', color: '#3c8fe0', speedMultiplier: 0.25 }]
+    const oceanTerrainTypes: TerrainType[] = [...terrainTypes, { id: 'ocean', name: 'Ocean', color: '#3c8fe0', speedMultiplier: 0.25, climateElevationOverride: null }]
     // Route crosses straight out of CONTINENT (land, x<100) into open water (x>100).
     const trip = calculateTrip(
       [{ x: 50, y: 50 }, { x: 150, y: 50 }],
@@ -329,7 +329,7 @@ describe('calculateTrip', () => {
     // MEADOW (x=[100,200]) is entirely outside CONTINENT (water side) but is
     // an explicitly painted zone — its own 1.5x multiplier should win, not
     // the impassable ocean default.
-    const oceanTerrainTypes: TerrainType[] = [...terrainTypes, { id: 'ocean', name: 'Ocean', color: '#3c8fe0', speedMultiplier: 0 }]
+    const oceanTerrainTypes: TerrainType[] = [...terrainTypes, { id: 'ocean', name: 'Ocean', color: '#3c8fe0', speedMultiplier: 0, climateElevationOverride: null }]
     const trip = calculateTrip(
       [{ x: 110, y: 50 }, { x: 190, y: 50 }],
       ZONES,
@@ -571,7 +571,7 @@ describe('foldDrawnPathAtWraps', () => {
 })
 
 describe('mergeTripResults', () => {
-  const terrainTypes: TerrainType[] = [{ id: 'forest', name: 'Forest', color: '#4caf6e', speedMultiplier: 0.5 }]
+  const terrainTypes: TerrainType[] = [{ id: 'forest', name: 'Forest', color: '#4caf6e', speedMultiplier: 0.5, climateElevationOverride: null }]
   const lineTypes: LineType[] = []
   const scale = { pixelDistance: 100, realDistance: 10, unit: 'miles' }
   const walking: TravelMode = { id: 'walk', name: 'Walking', speed: 2, timeUnitLabel: 'hours' }
@@ -587,7 +587,7 @@ describe('mergeTripResults', () => {
   })
 
   it('propagates Infinity from an impassable leg', () => {
-    const impassableLine: LineType = { id: 'wall', name: 'Wall', color: '#000', speedMultiplier: 0 }
+    const impassableLine: LineType = { id: 'wall', name: 'Wall', color: '#000', speedMultiplier: 0, climateElevationOverride: null }
     const wall: MapLine = {
       id: 'wall-1',
       lineTypeId: 'wall',

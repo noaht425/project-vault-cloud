@@ -442,6 +442,16 @@ export function MapGenerationPanel({
         return [];
       });
       const anchorRadiusPixels = anchors.length > 0 ? anchorRadiusFraction * Math.min(workingDims.width, workingDims.height) : 0;
+      // Your own hand-painted Mountains/Hills zones (any terrain type with
+      // climateElevationOverride set) — read fresh every run for the same
+      // reason anchors are, and passed straight through as plain polygon +
+      // elevation pairs so generateClimate stays decoupled from the note
+      // schema.
+      const terrainTypeById = new Map(data.terrainTypes.map((t) => [t.id, t]));
+      const elevatedZones = data.zones.flatMap((zone) => {
+        const elevation = terrainTypeById.get(zone.terrainTypeId)?.climateElevationOverride;
+        return elevation !== null && elevation !== undefined ? [{ points: zone.points, elevation }] : [];
+      });
       const result = generateClimate({
         seed,
         widthPixels: workingDims.width,
@@ -457,6 +467,7 @@ export function MapGenerationPanel({
         boundaryMask: activeBoundaryMask,
         anchors,
         anchorRadiusPixels,
+        elevatedZones,
       });
       const existingTypeIds = new Set(data.climateTypes.map((t) => t.id));
       const newTypes = result.climateTypes.filter((t) => !existingTypeIds.has(t.id));

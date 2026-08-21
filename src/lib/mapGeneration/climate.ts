@@ -51,13 +51,13 @@ export function classifyBiome(temperature: number, moisture: number, elevation: 
 // overriding its output) is what keeps a filled-in anchor climatically
 // consistent with its surroundings: a desert anchor near a taiga anchor
 // produces a believable savanna/grassland-ish gradient between them instead
-// of two hard-edged patches meeting at a seam, and a real elevation
-// constraint (very high land still reads as alpine) is never overridden by
-// a distant anchor's pull. Alpine has no true elevation-free representative
-// — its threshold is elevation, not temperature/moisture — so its target is
-// just "cold, moderate moisture": pulling nearby terrain toward tundra/taiga
-// if it isn't literally mountainous there, rather than forcing an alpine
-// reading onto flat land near a high-altitude anchor.
+// of two hard-edged patches meeting at a seam. Alpine has no true
+// temperature/moisture identity of its own (its real gate is elevation —
+// see BIOME_ELEVATION_TARGETS below) — its entry here is just "cold,
+// moderate moisture", the reasonable fallback reading for cells near an
+// alpine anchor that the elevation pull doesn't manage to push over the
+// alpine threshold (e.g. two overlapping anchors fighting over the same
+// cell).
 export const BIOME_CLIMATE_TARGETS: Record<BiomeId, { temperature: number; moisture: number }> = {
   tundra: { temperature: 0.15, moisture: 0.2 },
   taiga: { temperature: 0.15, moisture: 0.7 },
@@ -67,6 +67,32 @@ export const BIOME_CLIMATE_TARGETS: Record<BiomeId, { temperature: number; moist
   savanna: { temperature: 0.825, moisture: 0.5 },
   rainforest: { temperature: 0.825, moisture: 0.85 },
   alpine: { temperature: 0.1, moisture: 0.5 }
+}
+
+// Representative elevation for each biome — every non-alpine biome shares
+// the same comfortably-below-threshold value (elevation isn't otherwise
+// part of any non-alpine biome's identity), while alpine's is comfortably
+// above ALPINE_ELEVATION_THRESHOLD. Without this, an alpine-tagged anchor
+// (e.g. a real mountain city) had no way to reliably read as alpine at
+// all — classifyBiome checks elevation FIRST and unconditionally, so
+// pulling only temperature/moisture toward "cold, moderate" still produced
+// tundra/taiga at that exact point unless the freshly-generated, entirely
+// unrelated elevation noise *happened* to be mountainous there. The same
+// gap ran the other way too: a lowland anchor (say, a coastal desert city)
+// could get silently overridden to alpine by an unrelated "phantom
+// mountain" in the noise a few cells away, with no anchor mechanism able to
+// override it, since elevation alone decided the outcome before
+// temperature/moisture ever got a vote. Pulling elevation toward whichever
+// anchor is nearest (see blendTowardAnchors) fixes both directions at once.
+export const BIOME_ELEVATION_TARGETS: Record<BiomeId, number> = {
+  tundra: 0.45,
+  taiga: 0.45,
+  grassland: 0.45,
+  'temperate-forest': 0.45,
+  desert: 0.45,
+  savanna: 0.45,
+  rainforest: 0.45,
+  alpine: 0.85
 }
 
 export interface ClimateAnchor {
@@ -89,30 +115,58 @@ function anchorInfluence(distance: number, radiusPixels: number): number {
 // nearby anchors' own known-correct values — inverse-distance-weighted
 // across every anchor within range, so a point between two differently-
 // classified anchors gets pulled proportionally toward each rather than
-// snapping to whichever is merely nearest. Anchors beyond radiusPixels of a
-// given point contribute nothing, and a point with no anchor in range at
-// all passes its natural values through completely unchanged — this is what
-// keeps the whole mechanism additive: a map with no anchors (the case for
-// every map today) generates exactly as it did before this existed.
+// snapping to whichever is merely nearest. This averaging is deliberately
+// NOT used for elevation (see below) — a real transition zone between two
+// climates is a genuine gradient, but "how mountainous is the ground here"
+// isn't something that meaningfully averages across several nearby
+// settlements the way temperature/moisture do.
+//
+// Elevation instead follows whichever single anchor is closest, at that
+// anchor's own weight alone, ignoring every other anchor in range —
+// confirmed necessary, not just simpler: with a plain weighted average, an
+// alpine-tagged anchor surrounded by several closer lowland anchors (a
+// dense kingdom is exactly this shape) got its own elevation pull diluted
+// below ALPINE_ELEVATION_THRESHOLD even at its own exact coordinates, since
+// every neighbor within radius kept contributing to the same average.
+// "Nearest governs elevation" fixes this by construction: an anchor's
+// distance to itself is always 0, which is always <= its distance to any
+// other anchor, so its own elevation target always wins at its own point
+// regardless of how many neighbors also happen to be in range — while
+// still tapering smoothly away via the same anchorInfluence falloff as
+// every other pull once you move away from it.
+//
+// Anchors beyond radiusPixels of a given point contribute nothing, and a
+// point with no anchor in range at all passes its natural values through
+// completely unchanged — this is what keeps the whole mechanism additive: a
+// map with no anchors (the case for every map before this existed) blends
+// nothing, no behavior change.
 export function blendTowardAnchors(
   point: Point,
-  naturalTemperature: number,
-  naturalMoisture: number,
+  natural: { temperature: number; moisture: number; elevation: number },
   anchors: ClimateAnchor[],
   radiusPixels: number
-): { temperature: number; moisture: number } {
+): { temperature: number; moisture: number; elevation: number } {
   let totalWeight = 0
   let weightedTemperature = 0
   let weightedMoisture = 0
+  let nearestDistance = Infinity
+  let nearestWeight = 0
+  let nearestElevationTarget = 0
   for (const anchor of anchors) {
-    const weight = anchorInfluence(segmentDistance(point, anchor), radiusPixels)
+    const distance = segmentDistance(point, anchor)
+    const weight = anchorInfluence(distance, radiusPixels)
     if (weight <= 0) continue
-    const target = BIOME_CLIMATE_TARGETS[anchor.biomeId]
+    const climateTarget = BIOME_CLIMATE_TARGETS[anchor.biomeId]
     totalWeight += weight
-    weightedTemperature += weight * target.temperature
-    weightedMoisture += weight * target.moisture
+    weightedTemperature += weight * climateTarget.temperature
+    weightedMoisture += weight * climateTarget.moisture
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestWeight = weight
+      nearestElevationTarget = BIOME_ELEVATION_TARGETS[anchor.biomeId]
+    }
   }
-  if (totalWeight <= 0) return { temperature: naturalTemperature, moisture: naturalMoisture }
+  if (totalWeight <= 0) return natural
   // Capped at 1 so heavy overlap between several anchors' radii can't pull
   // a cell harder than any single anchor could on its own (full replacement
   // is the strongest effect this ever has, right at an anchor's own point).
@@ -120,8 +174,9 @@ export function blendTowardAnchors(
   const anchorTemperature = weightedTemperature / totalWeight
   const anchorMoisture = weightedMoisture / totalWeight
   return {
-    temperature: naturalTemperature + (anchorTemperature - naturalTemperature) * pull,
-    moisture: naturalMoisture + (anchorMoisture - naturalMoisture) * pull
+    temperature: natural.temperature + (anchorTemperature - natural.temperature) * pull,
+    moisture: natural.moisture + (anchorMoisture - natural.moisture) * pull,
+    elevation: natural.elevation + (nearestElevationTarget - natural.elevation) * nearestWeight
   }
 }
 
@@ -203,6 +258,16 @@ export interface ClimateGenerationParams extends ElevationGridParams {
   // completely. 0/omitted disables anchor blending entirely, regardless of
   // whether anchors are passed.
   anchorRadiusPixels?: number
+  // Hand-painted zones whose terrain type has a climateElevationOverride
+  // set (see noteTypes/map.ts's terrainTypeSchema) — every cell inside one
+  // of these polygons has its elevation raised to at least that value
+  // (never lowered — a zone only ever guarantees a FLOOR, so it can't
+  // demote a cell the noise already made higher) before land/sea, rain
+  // shadow, and biome classification all run, so your own drawn Mountains/
+  // Hills inform the climate layer instead of it inventing unrelated
+  // elevation from noise alone. Empty/omitted has no effect (fully
+  // additive) — see applyElevatedZones.
+  elevatedZones?: { points: Point[]; elevation: number }[]
 }
 
 export interface ClimateGenerationResult {
@@ -211,6 +276,35 @@ export interface ClimateGenerationResult {
 }
 
 const MIN_CLIMATE_ZONE_AREA_FRACTION = 0.003
+
+// Raises every grid cell inside an elevated zone's polygon to at least that
+// zone's elevation (mutates the grid in place — it's a fresh local array
+// from computeElevationGrid, never shared/cached elsewhere). A cell inside
+// several overlapping zones ends up at the HIGHEST of their elevations
+// (checked independently per zone, keeping whichever is greater), matching
+// "a Mountains zone drawn overlapping a Hills zone should read as the more
+// elevated one" rather than some average of the two. Never lowers a cell
+// below what the noise already gave it — a zone is a floor, not a ceiling.
+function applyElevatedZones(
+  elevation: number[][],
+  cols: number,
+  rows: number,
+  pixelsPerCellX: number,
+  pixelsPerCellY: number,
+  elevatedZones: { points: Point[]; elevation: number }[]
+): void {
+  if (elevatedZones.length === 0) return
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+      for (const zone of elevatedZones) {
+        if (zone.elevation > elevation[y][x] && pointInPolygon(centerPx, zone.points)) {
+          elevation[y][x] = zone.elevation
+        }
+      }
+    }
+  }
+}
 
 export function generateClimate(params: ClimateGenerationParams, idFactory: () => string = () => crypto.randomUUID()): ClimateGenerationResult {
   const {
@@ -224,9 +318,14 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
     prevailingWindDirection = 'W',
     boundaryMask = null,
     anchors = [],
-    anchorRadiusPixels = 0
+    anchorRadiusPixels = 0,
+    elevatedZones = []
   } = params
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
+  // Applied before anything downstream reads the grid, so hand-painted
+  // Mountains/Hills inform land/sea, rain-shadow moisture, AND the final
+  // alpine gate consistently — not just the last of those.
+  applyElevatedZones(elevation, cols, rows, pixelsPerCellX, pixelsPerCellY, elevatedZones)
 
   const hasMask = boundaryMask !== null && boundaryMask.length >= 3
   const insideMask = (x: number, y: number): boolean => {
@@ -266,11 +365,12 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
       const shadow = computeRainShadowMultiplier(elevation, cols, rows, x, y, prevailingWindDirection)
       const naturalMoisture = Math.max(0, Math.min(1, baseMoisture * shadow))
       const naturalTemperature = Math.max(0, Math.min(1, (temperatureAt(y) + 1) / 2))
-      const { temperature, moisture } =
+      const natural = { temperature: naturalTemperature, moisture: naturalMoisture, elevation: elevation[y][x] }
+      const { temperature, moisture, elevation: effectiveElevation } =
         anchors.length > 0 && anchorRadiusPixels > 0
-          ? blendTowardAnchors({ x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }, naturalTemperature, naturalMoisture, anchors, anchorRadiusPixels)
-          : { temperature: naturalTemperature, moisture: naturalMoisture }
-      row.push(classifyBiome(temperature, moisture, elevation[y][x]))
+          ? blendTowardAnchors({ x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }, natural, anchors, anchorRadiusPixels)
+          : natural
+      row.push(classifyBiome(temperature, moisture, effectiveElevation))
     }
     biomeAt.push(row)
   }

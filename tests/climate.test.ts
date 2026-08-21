@@ -65,23 +65,26 @@ describe('computeRainShadowMultiplier', () => {
 })
 
 describe('blendTowardAnchors', () => {
+  const NATURAL = { temperature: 0.1, moisture: 0.9, elevation: 0.5 }
+
   it('passes natural values through unchanged with no anchors in range', () => {
-    expect(blendTowardAnchors({ x: 0, y: 0 }, 0.5, 0.5, [], 100)).toEqual({ temperature: 0.5, moisture: 0.5 })
-    expect(blendTowardAnchors({ x: 0, y: 0 }, 0.5, 0.5, [{ x: 1000, y: 1000, biomeId: 'desert' }], 100)).toEqual({ temperature: 0.5, moisture: 0.5 })
+    expect(blendTowardAnchors({ x: 0, y: 0 }, NATURAL, [], 100)).toEqual(NATURAL)
+    expect(blendTowardAnchors({ x: 0, y: 0 }, NATURAL, [{ x: 1000, y: 1000, biomeId: 'desert' }], 100)).toEqual(NATURAL)
   })
 
   it('fully replaces natural values with the anchor target exactly at the anchor point', () => {
     const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'desert' }]
-    const result = blendTowardAnchors({ x: 0, y: 0 }, 0.1, 0.9, anchors, 100)
+    const result = blendTowardAnchors({ x: 0, y: 0 }, NATURAL, anchors, 100)
     expect(result.temperature).toBeCloseTo(0.825, 5)
     expect(result.moisture).toBeCloseTo(0.15, 5)
+    expect(result.elevation).toBeCloseTo(0.45, 5)
   })
 
   it('tapers smoothly with distance instead of a hard cutoff', () => {
     const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'desert' }]
-    const near = blendTowardAnchors({ x: 20, y: 0 }, 0.1, 0.9, anchors, 100)
-    const mid = blendTowardAnchors({ x: 50, y: 0 }, 0.1, 0.9, anchors, 100)
-    const far = blendTowardAnchors({ x: 90, y: 0 }, 0.1, 0.9, anchors, 100)
+    const near = blendTowardAnchors({ x: 20, y: 0 }, NATURAL, anchors, 100)
+    const mid = blendTowardAnchors({ x: 50, y: 0 }, NATURAL, anchors, 100)
+    const far = blendTowardAnchors({ x: 90, y: 0 }, NATURAL, anchors, 100)
     // Monotonically approaches the natural value as distance grows.
     expect(near.temperature).toBeGreaterThan(mid.temperature)
     expect(mid.temperature).toBeGreaterThan(far.temperature)
@@ -93,11 +96,38 @@ describe('blendTowardAnchors', () => {
       { x: 0, y: 0, biomeId: 'desert' }, // hot/dry
       { x: 100, y: 0, biomeId: 'tundra' } // cold/dry
     ]
-    const midpoint = blendTowardAnchors({ x: 50, y: 0 }, 0.5, 0.5, anchors, 100)
+    const midpoint = blendTowardAnchors({ x: 50, y: 0 }, { temperature: 0.5, moisture: 0.5, elevation: 0.5 }, anchors, 100)
     // Roughly halfway between desert's 0.825 and tundra's 0.15 temperature —
     // not equal to either endpoint, confirming a real blend occurred.
     expect(midpoint.temperature).toBeGreaterThan(0.3)
     expect(midpoint.temperature).toBeLessThan(0.65)
+  })
+
+  it('pulls elevation above the alpine threshold for an alpine anchor, even over naturally low elevation', () => {
+    const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'alpine' }]
+    const result = blendTowardAnchors({ x: 0, y: 0 }, { temperature: 0.5, moisture: 0.5, elevation: 0.1 }, anchors, 100)
+    expect(result.elevation).toBeCloseTo(0.85, 5)
+    expect(classifyBiome(result.temperature, result.moisture, result.elevation)).toBe('alpine')
+  })
+
+  it('pulls elevation below the alpine threshold for a non-alpine anchor, even over naturally high (phantom-mountain) elevation', () => {
+    const anchors: ClimateAnchor[] = [{ x: 0, y: 0, biomeId: 'desert' }]
+    const result = blendTowardAnchors({ x: 0, y: 0 }, { temperature: 0.5, moisture: 0.5, elevation: 0.95 }, anchors, 100)
+    expect(result.elevation).toBeCloseTo(0.45, 5)
+    expect(classifyBiome(result.temperature, result.moisture, result.elevation)).toBe('desert')
+  })
+
+  it('an alpine anchor still reads as alpine at its own exact point even surrounded by several closer lowland anchors (regression: a plain weighted-average diluted this below threshold)', () => {
+    const anchors: ClimateAnchor[] = [
+      { x: 0, y: 0, biomeId: 'alpine' },
+      { x: 20, y: 0, biomeId: 'temperate-forest' },
+      { x: 0, y: 25, biomeId: 'temperate-forest' },
+      { x: -18, y: 0, biomeId: 'taiga' },
+      { x: 0, y: -30, biomeId: 'temperate-forest' }
+    ]
+    const result = blendTowardAnchors({ x: 0, y: 0 }, { temperature: 0.5, moisture: 0.5, elevation: 0.1 }, anchors, 100)
+    expect(result.elevation).toBeCloseTo(0.85, 5)
+    expect(classifyBiome(result.temperature, result.moisture, result.elevation)).toBe('alpine')
   })
 })
 
@@ -183,5 +213,34 @@ describe('generateClimate', () => {
       idSequence()
     )
     for (const zone of result.climateZones) expect(polygonArea(zone.points)).toBeGreaterThan(0)
+  })
+
+  it('a hand-painted elevated zone reads as alpine at its own location, overriding whatever the unzoned run classified there', () => {
+    const base = { seed: 15, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.2, topLatitude: 5, bottomLatitude: -5 }
+    const withoutZone = generateClimate(base, idSequence())
+    const centerBiomeWithoutZone = withoutZone.climateZones.find((z) => polygonArea(z.points) > 0 && pointInPolygon({ x: 500, y: 500 }, z.points))
+    expect(centerBiomeWithoutZone?.climateTypeId).not.toBe('alpine')
+
+    const mountainZone = { points: [{ x: 400, y: 400 }, { x: 600, y: 400 }, { x: 600, y: 600 }, { x: 400, y: 600 }], elevation: 0.9 }
+    const withZone = generateClimate({ ...base, elevatedZones: [mountainZone] }, idSequence())
+    const zoneCenterBiome = withZone.climateZones.find((z) => polygonArea(z.points) > 0 && pointInPolygon({ x: 500, y: 500 }, z.points))
+    expect(zoneCenterBiome?.climateTypeId).toBe('alpine')
+  })
+
+  it('an elevated zone never lowers a cell the noise already made higher (floor, not ceiling)', () => {
+    const base = { seed: 15, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.2, topLatitude: 5, bottomLatitude: -5 }
+    const lowZone = { points: [{ x: 400, y: 400 }, { x: 600, y: 400 }, { x: 600, y: 600 }, { x: 400, y: 600 }], elevation: 0 }
+    const withoutZone = generateClimate(base, idSequence())
+    const withLowZone = generateClimate({ ...base, elevatedZones: [lowZone] }, idSequence())
+    // A 0-elevation floor can never raise anything, so this must match the
+    // unzoned run exactly — proof the mechanism only ever raises, never lowers.
+    expect(withLowZone.climateZones.map((z) => z.points)).toEqual(withoutZone.climateZones.map((z) => z.points))
+  })
+
+  it('with no elevated zones, behaves exactly as before (fully additive)', () => {
+    const params = { seed: 12, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, topLatitude: 60, bottomLatitude: -20 }
+    const withoutField = generateClimate(params, idSequence())
+    const withEmptyZones = generateClimate({ ...params, elevatedZones: [] }, idSequence())
+    expect(withEmptyZones.climateZones.map((z) => z.points)).toEqual(withoutField.climateZones.map((z) => z.points))
   })
 })
