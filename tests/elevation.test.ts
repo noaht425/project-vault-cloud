@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeElevationGrid, generateTerrain } from '../src/lib/mapGeneration/elevation'
+import { computeElevationGrid, generateTerrain, placeContinentCenters } from '../src/lib/mapGeneration/elevation'
 import { polygonArea, signedPolygonArea } from '../src/lib/mapGeneration/contour'
 
 function idSequence(): () => string {
@@ -238,6 +238,55 @@ describe('computeElevationGrid edgesAreOcean (world-map mode)', () => {
     // largest — not every continent landing at (within noise) the same
     // uniform size.
     expect(areas[0]).toBeLessThan(areas[areas.length - 1] * 0.85)
+  })
+
+  it('landmassScale grows/shrinks continents in world mode too, not just their internal coastline texture (regression: it previously only affected noise detail, so raising it did not visibly enlarge anything)', () => {
+    const base = { seed: 6, widthPixels: 1000, heightPixels: 1000, edgesAreOcean: true, continentCount: 1 }
+    const small = computeElevationGrid({ ...base, landmassScale: 0.1 })
+    const large = computeElevationGrid({ ...base, landmassScale: 0.9 })
+    // Count land cells (elevation clearing a typical sea level) as a cheap
+    // proxy for "how big does the single continent actually read" — a
+    // much higher landmassScale should cover meaningfully more of the grid.
+    const seaLevel = 0.5
+    const countLand = (grid: ReturnType<typeof computeElevationGrid>): number => {
+      let count = 0
+      for (const row of grid.values) for (const v of row) if (v >= seaLevel) count++
+      return count
+    }
+    expect(countLand(large)).toBeGreaterThan(countLand(small) * 2)
+  })
+
+  it('never shrinks continents small enough to vanish entirely, even at low landmassScale combined with a high continentCount (regression: landmassScale 0.1 + continentCount 6 produced zero landmasses — every continent fell under the noise-filter area threshold)', () => {
+    const { landmasses } = generateTerrain({
+      seed: 6,
+      widthPixels: 1000,
+      heightPixels: 1000,
+      edgesAreOcean: true,
+      continentCount: 6,
+      landmassScale: 0.1
+    })
+    expect(landmasses.length).toBeGreaterThan(0)
+  })
+
+  it("scatters continent centers across the canvas instead of a visible rigid grid (regression: jitter was tiny relative to each continent's own partition, so centers barely moved off their exact grid slot)", () => {
+    const cols = 96
+    const rows = 96
+    const referenceRadius = (0.3 * Math.min(cols, rows)) / Math.sqrt(4)
+    const partitionWidth = cols / 2
+    const partitionHeight = rows / 2
+    const partitionCenterX = 0.5 * partitionWidth
+    const partitionCenterY = 0.5 * partitionHeight
+    // Same partition slot (top-left of a 2x2 layout) across several seeds
+    // should land at visibly different offsets from that partition's own
+    // center, not all sit within a tight cluster near it.
+    const offsets = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => {
+      const [first] = placeContinentCenters(seed, 4, cols, rows, referenceRadius, 0.35)
+      return Math.hypot(first.x - partitionCenterX, first.y - partitionCenterY)
+    })
+    // At least one of these offsets should be a meaningful fraction of the
+    // partition's own size — a rigid grid (tiny jitter) would keep every
+    // one of them very close to 0.
+    expect(Math.max(...offsets)).toBeGreaterThan(partitionWidth * 0.15)
   })
 })
 

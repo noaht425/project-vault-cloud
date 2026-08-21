@@ -87,37 +87,43 @@ interface ContinentCenter extends Point {
 
 // Scatters `count` landmass centers (in grid-cell units) across a roughly
 // even ceil(sqrt(count)) x ceil(sqrt(count)) partition of the grid — each
-// starts at its own partition's center, then wanders by at most 15% of
-// referenceRadius — stratified sampling, not pure-random placement, so N
-// centers stay reasonably spread out instead of occasionally clustering
-// into one corner (which plain per-center random coordinates would risk for
-// a small N). Deterministic from the seed, same reproducibility guarantee
-// as everything else here.
+// starts at its own partition's center, then wanders by up to 35% of that
+// partition's own width/height — stratified sampling, not pure-random
+// placement, so N centers stay reasonably spread out instead of
+// occasionally clustering into one corner (which plain per-center random
+// coordinates would risk for a small N), while still landing somewhere
+// that doesn't look like a rigid grid. Deterministic from the seed, same
+// reproducibility guarantee as everything else here.
 //
-// Jitter is scaled to referenceRadius (not to partition size) deliberately:
-// an earlier version jittered within the middle 60% of the WHOLE partition,
-// which for a single continent (one partition = the entire canvas) could
-// wander close enough to a corner that islandMaskAt never fully faded out
-// along the OPPOSITE edges — confirmed by a failing test asserting every
-// edge cell reads below sea level. Tying the wander distance to
-// referenceRadius instead guarantees the same edge-fades-to-ocean margin
-// regardless of continentCount.
+// An earlier version jittered by a small FRACTION OF referenceRadius
+// instead of partition size, to keep centers away from the canvas edge —
+// but referenceRadius is only about 30% of a partition's own width, so
+// that jitter only ever wandered a center across ~4% of its partition,
+// which read as a visibly rigid grid of continents (confirmed report: "it
+// frequently generates all continents in a grid pattern"). Jittering by
+// partition size instead and CLAMPING the result afterward (below) gets
+// genuine scatter without losing the edge/spacing guarantee.
 //
-// Each center also gets its OWN radius, 80%-120% of referenceRadius —
-// without this, every continent at a given continentCount came out an
-// identical size (confirmed: several generated world maps all showed
-// uniform, near-perfectly-circular landmasses, every one the exact same
-// size, since they all shared one global radius with zero per-continent
-// variation). Kept fairly tight (not e.g. +/-50%) because the worst-case
-// combination of max position jitter AND max radius both landing in the
-// same unlucky direction still has to stay inside referenceRadius's own
-// edge-safety margin (see computeElevationGrid's 0.3 factor) — the two
-// jitter amounts are sized together, not independently.
-function placeContinentCenters(seed: number, count: number, cols: number, rows: number, referenceRadius: number): ContinentCenter[] {
+// Each center also gets its own radius, scaled by landmassScale relative
+// to the 0.35 default (so "Landmass scale" actually grows/shrinks
+// continents the way it already does in section mode, not just their
+// internal coastline texture — see computeElevationGrid's featureScale)
+// with 80%-120% per-continent jitter on top of that so same-count
+// continents aren't identical sizes (confirmed: several generated world
+// maps showed uniform, near-perfectly-circular landmasses, every one the
+// exact same size).
+export function placeContinentCenters(seed: number, count: number, cols: number, rows: number, referenceRadius: number, landmassScale: number): ContinentCenter[] {
   const partitionSize = Math.ceil(Math.sqrt(count))
   const partitionWidth = cols / partitionSize
   const partitionHeight = rows / partitionSize
-  const jitterAmount = referenceRadius * 0.15
+  // Floored at 0.4: below that, a continent's own area falls under
+  // generateTerrain's MIN_LANDMASS_AREA_FRACTION noise filter and gets
+  // silently culled, so low landmassScale (esp. combined with a higher
+  // continentCount, which already shrinks referenceRadius per continent)
+  // could wipe out every landmass rather than just making them smaller
+  // (confirmed: landmassScale 0.1 + continentCount 6 produced zero
+  // landmasses). The slider should shrink continents, never erase them.
+  const sizeMultiplier = Math.max(0.4, landmassScale / 0.35)
   const centers: ContinentCenter[] = []
   for (let i = 0; i < count; i++) {
     const partitionX = i % partitionSize
@@ -127,10 +133,20 @@ function placeContinentCenters(seed: number, count: number, cols: number, rows: 
     const jitterX = deterministicFraction(hashSeed(seed, i, 1)) * 2 - 1
     const jitterY = deterministicFraction(hashSeed(seed, i, 2)) * 2 - 1
     const radiusJitter = deterministicFraction(hashSeed(seed, i, 3))
+    const radius = referenceRadius * sizeMultiplier * (0.8 + radiusJitter * 0.4)
+    // Clamped AFTER jittering (not just kept small enough to never need
+    // it) — this is what makes the generous position scatter above safe:
+    // regardless of how far a raw jitter wandered, or how big landmassScale
+    // made this particular continent's own radius, its center never ends
+    // up close enough to the true canvas edge for islandMaskAt to fail to
+    // fade to 0 there.
+    const safeMargin = Math.min(radius * 1.05, cols / 2, rows / 2)
+    const rawX = partitionCenterX + jitterX * partitionWidth * 0.35
+    const rawY = partitionCenterY + jitterY * partitionHeight * 0.35
     centers.push({
-      x: partitionCenterX + jitterX * jitterAmount,
-      y: partitionCenterY + jitterY * jitterAmount,
-      radius: referenceRadius * (0.8 + radiusJitter * 0.4)
+      x: Math.min(cols - safeMargin, Math.max(safeMargin, rawX)),
+      y: Math.min(rows - safeMargin, Math.max(safeMargin, rawY)),
+      radius
     })
   }
   return centers
@@ -184,13 +200,16 @@ export function computeElevationGrid(params: ElevationGridParams): ElevationGrid
   // omitted/false) skips this entirely and generates exactly as it always
   // has. referenceRadius shrinks as continentCount grows so N landmasses
   // can each get their own reasonably-sized region instead of every mask
-  // blanketing the whole grid regardless of count. The 0.3 factor (rather
-  // than half the available space) leaves enough margin that even the
-  // worst case — maximum position jitter AND maximum per-center radius
-  // (see placeContinentCenters) landing in the same direction at once —
-  // still fades to 0 comfortably before the canvas edge, not right at it.
+  // blanketing the whole grid regardless of count — this is the LAYOUT
+  // radius used for spacing/placement, deliberately not itself scaled by
+  // landmassScale (see placeContinentCenters, which applies that scaling
+  // per-continent instead) so the partition grid used to spread continents
+  // out stays the same shape regardless of how big the user asked them to
+  // be; edge safety no longer depends on this factor being small (see
+  // placeContinentCenters' post-jitter clamp), so 0.3 is just a reasonable
+  // starting spacing, not a safety-critical bound.
   const referenceRadius = (0.3 * Math.min(cols, rows)) / Math.sqrt(Math.max(1, continentCount))
-  const continentCenters = edgesAreOcean ? placeContinentCenters(seed, Math.max(1, continentCount), cols, rows, referenceRadius) : []
+  const continentCenters = edgesAreOcean ? placeContinentCenters(seed, Math.max(1, continentCount), cols, rows, referenceRadius, landmassScale) : []
 
   // Base continent shape (low frequency) plus a higher-frequency ridged
   // layer, the latter only contributing on already-elevated land (see
