@@ -7,7 +7,7 @@
 import { pointInPolygon, segmentDistance, type Point } from '../mapGeometry'
 import type { ClimateType, ClimateZone } from '../noteTypes/map'
 import { fractalNoise2D } from './noise'
-import { computeElevationGrid, type ElevationGridParams } from './elevation'
+import { applyElevatedZones, computeElevationGrid, type ElevationGridParams } from './elevation'
 import { polygonArea, signedPolygonArea, smoothPolygon, traceRegionBoundaries } from './contour'
 
 export type BiomeId = 'tundra' | 'taiga' | 'grassland' | 'temperate-forest' | 'desert' | 'savanna' | 'rainforest' | 'alpine'
@@ -268,6 +268,35 @@ export interface ClimateGenerationParams extends ElevationGridParams {
   // elevation from noise alone. Empty/omitted has no effect (fully
   // additive) — see applyElevatedZones.
   elevatedZones?: { points: Point[]; elevation: number }[]
+  // Every landmass currently on the map (in practice: just the hand-drawn
+  // ones — see the caller in MapGenerationPanel.tsx) — when non-empty, land
+  // vs. water for this run is decided STRICTLY by whether a cell falls
+  // inside one of these polygons, not by this call's own freshly-invented
+  // elevation field at all (elevation itself is still used for everything
+  // else — rain-shadow moisture, the alpine gate — just not the land/water
+  // boolean).
+  //
+  // Without this, climate classifies land/water from a BRAND NEW elevation
+  // field (this same seed/params run through computeElevationGrid) that has
+  // no relationship to a hand-drawn map's actual coastline except through
+  // boundaryMask — and a mask only ever guarantees cells OUTSIDE it are
+  // water, never that cells INSIDE it are land. Wherever that invented field
+  // dips below seaLevel in the interior of a real hand-drawn island, the
+  // cell silently gets no biome at all — confirmed: a fully hand-drawn
+  // multi-island map showed visible blank, uncolored gaps inside islands
+  // that were clearly land in the artwork. A plain elevation floor (raise
+  // low cells, never lower high ones) can't fully fix this either — it only
+  // ever adds land, so it can't stop the SAME invented field from also
+  // reading a real ocean gap between two islands as land (see hydrology.ts's
+  // identical reasoning for the river version of this bug). A strict
+  // polygon-based land test fixes both directions at once.
+  //
+  // Empty/omitted (the default) reproduces every prior release's behavior:
+  // land/water comes entirely from elevation vs. seaLevel — correct for a
+  // purely procedural map (nothing hand-drawn to disagree with) and for a
+  // scoped augment/drilldown run inventing land in a region no existing
+  // landmass covers yet (see the caller: only passed on a whole-map run).
+  landmassPolygons?: Point[][]
 }
 
 export interface ClimateGenerationResult {
@@ -276,35 +305,6 @@ export interface ClimateGenerationResult {
 }
 
 const MIN_CLIMATE_ZONE_AREA_FRACTION = 0.003
-
-// Raises every grid cell inside an elevated zone's polygon to at least that
-// zone's elevation (mutates the grid in place — it's a fresh local array
-// from computeElevationGrid, never shared/cached elsewhere). A cell inside
-// several overlapping zones ends up at the HIGHEST of their elevations
-// (checked independently per zone, keeping whichever is greater), matching
-// "a Mountains zone drawn overlapping a Hills zone should read as the more
-// elevated one" rather than some average of the two. Never lowers a cell
-// below what the noise already gave it — a zone is a floor, not a ceiling.
-function applyElevatedZones(
-  elevation: number[][],
-  cols: number,
-  rows: number,
-  pixelsPerCellX: number,
-  pixelsPerCellY: number,
-  elevatedZones: { points: Point[]; elevation: number }[]
-): void {
-  if (elevatedZones.length === 0) return
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
-      for (const zone of elevatedZones) {
-        if (zone.elevation > elevation[y][x] && pointInPolygon(centerPx, zone.points)) {
-          elevation[y][x] = zone.elevation
-        }
-      }
-    }
-  }
-}
 
 export function generateClimate(params: ClimateGenerationParams, idFactory: () => string = () => crypto.randomUUID()): ClimateGenerationResult {
   const {
@@ -319,12 +319,13 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
     boundaryMask = null,
     anchors = [],
     anchorRadiusPixels = 0,
-    elevatedZones = []
+    elevatedZones = [],
+    landmassPolygons = []
   } = params
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
   // Applied before anything downstream reads the grid, so hand-painted
-  // Mountains/Hills inform land/sea, rain-shadow moisture, AND the final
-  // alpine gate consistently — not just the last of those.
+  // Mountains/Hills inform rain-shadow moisture AND the final alpine gate
+  // consistently — not just one of the two.
   applyElevatedZones(elevation, cols, rows, pixelsPerCellX, pixelsPerCellY, elevatedZones)
 
   const hasMask = boundaryMask !== null && boundaryMask.length >= 3
@@ -333,7 +334,13 @@ export function generateClimate(params: ClimateGenerationParams, idFactory: () =
     const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
     return pointInPolygon(centerPx, boundaryMask as Point[])
   }
-  const isLandCell = (x: number, y: number): boolean => elevation[y][x] >= seaLevel && insideMask(x, y)
+  const hasLandmassPolygons = landmassPolygons.length > 0
+  const insideAnyLandmass = (x: number, y: number): boolean => {
+    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+    return landmassPolygons.some((polygon) => pointInPolygon(centerPx, polygon))
+  }
+  const isLandCell = (x: number, y: number): boolean =>
+    insideMask(x, y) && (hasLandmassPolygons ? insideAnyLandmass(x, y) : elevation[y][x] >= seaLevel)
 
   // Both branches return a value on the SAME [-1, 1] scale (1 = hottest,
   // -1 = coldest) before the caller normalizes it to [0, 1] — the fallback

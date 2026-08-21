@@ -248,6 +248,41 @@ export function computeElevationGrid(params: ElevationGridParams): ElevationGrid
   return { values, cols, rows, pixelsPerCellX, pixelsPerCellY }
 }
 
+// Raises every grid cell inside a zone's polygon to at least that zone's
+// elevation (mutates the grid in place — every caller's own fresh array
+// from computeElevationGrid, never shared/cached elsewhere). A cell inside
+// several overlapping zones ends up at the HIGHEST of their elevations
+// (checked independently per zone, keeping whichever is greater, since each
+// zone's check compares against the running value), matching "a Mountains
+// zone drawn overlapping a Hills zone should read as the more elevated one"
+// rather than some average of the two. Never lowers a cell below what the
+// noise already gave it — a zone is a floor, not a ceiling.
+//
+// Used by climate.ts for hand-painted climateElevationOverride terrain
+// (Mountains/Hills zones drawn with Paint Terrain) — kept here rather than
+// as a climate.ts-local helper since it's a general elevation-grid
+// primitive, not something specific to biome classification.
+export function applyElevatedZones(
+  elevation: number[][],
+  cols: number,
+  rows: number,
+  pixelsPerCellX: number,
+  pixelsPerCellY: number,
+  zones: { points: Point[]; elevation: number }[]
+): void {
+  if (zones.length === 0) return
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+      for (const zone of zones) {
+        if (zone.elevation > elevation[y][x] && pointInPolygon(centerPx, zone.points)) {
+          elevation[y][x] = zone.elevation
+        }
+      }
+    }
+  }
+}
+
 export interface TerrainGenerationParams extends ElevationGridParams {
   // 0-1 elevation threshold — cells at or above this are land. Higher
   // means more ocean. Default 0.5.

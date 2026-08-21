@@ -90,6 +90,35 @@ export interface HydrologyGenerationParams extends ElevationGridParams {
   riverLineTypeId?: string
   riverWidthPixels?: number
   boundaryMask?: Point[] | null
+  // Every landmass currently on the map (in practice: just the hand-drawn
+  // ones — see the caller in MapGenerationPanel.tsx) — when non-empty, land
+  // vs. water for this run is decided STRICTLY by whether a cell falls
+  // inside one of these polygons, not by this call's own freshly-invented
+  // elevation field at all (elevation is still used for everything else —
+  // flow-accumulation slope, which neighbor is "downhill" — just not for
+  // the land/water boolean).
+  //
+  // Without this, a river's land/water determination comes entirely from
+  // computeElevationGrid's noise, which has no relationship to a hand-drawn
+  // map's real coastline except through boundaryMask — and a mask only ever
+  // guarantees cells OUTSIDE it are water, never that cells INSIDE it match
+  // your drawing. Wherever the noise independently decided there's "land"
+  // spanning a gap between two hand-drawn islands that's clearly open water
+  // in the art, a river could trace straight across it — confirmed: rivers
+  // cutting through open ocean on a hand-drawn multi-island map. A plain
+  // elevation floor (raise low cells, never lower high ones) can't fix this
+  // either: it only ever adds land, it can never turn the noise's "land" in
+  // a real ocean gap back into water. Only a strict polygon-based land test
+  // does both at once — it also never needs to lower elevation into a flat,
+  // riverless plateau, since elevation stays untouched everywhere; land/
+  // water is answered independently of it whenever these polygons are given.
+  //
+  // Empty/omitted (the default) reproduces every prior release's behavior:
+  // land/water comes entirely from elevation vs. seaLevel — correct for a
+  // purely procedural map (nothing hand-drawn to disagree with) and for a
+  // scoped augment/drilldown run inventing land in a region no existing
+  // landmass covers yet (see the caller: only passed on a whole-map run).
+  landmassPolygons?: Point[][]
 }
 
 // A river shorter than this many points is treated as noise (a stray
@@ -97,7 +126,14 @@ export interface HydrologyGenerationParams extends ElevationGridParams {
 const MIN_RIVER_POINTS = 4
 
 export function generateRivers(params: HydrologyGenerationParams, idFactory: () => string = () => crypto.randomUUID()): MapLine[] {
-  const { seaLevel = 0.5, riverDensity = 0.5, riverLineTypeId = 'river', riverWidthPixels = 10, boundaryMask = null } = params
+  const {
+    seaLevel = 0.5,
+    riverDensity = 0.5,
+    riverLineTypeId = 'river',
+    riverWidthPixels = 10,
+    boundaryMask = null,
+    landmassPolygons = []
+  } = params
   const { values: elevation, cols, rows, pixelsPerCellX, pixelsPerCellY } = computeElevationGrid(params)
 
   const hasMask = boundaryMask !== null && boundaryMask.length >= 3
@@ -106,7 +142,13 @@ export function generateRivers(params: HydrologyGenerationParams, idFactory: () 
     const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
     return pointInPolygon(centerPx, boundaryMask as Point[])
   }
-  const isLandCell = (x: number, y: number): boolean => elevation[y][x] >= seaLevel && insideMask(x, y)
+  const hasLandmassPolygons = landmassPolygons.length > 0
+  const insideAnyLandmass = (x: number, y: number): boolean => {
+    const centerPx = { x: (x + 0.5) * pixelsPerCellX, y: (y + 0.5) * pixelsPerCellY }
+    return landmassPolygons.some((polygon) => pointInPolygon(centerPx, polygon))
+  }
+  const isLandCell = (x: number, y: number): boolean =>
+    insideMask(x, y) && (hasLandmassPolygons ? insideAnyLandmass(x, y) : elevation[y][x] >= seaLevel)
 
   const { flowTarget, accumulation, landCellsHighToLow } = computeFlowAccumulation(elevation, cols, rows, isLandCell)
 

@@ -132,6 +132,13 @@ describe('blendTowardAnchors', () => {
 })
 
 describe('generateClimate', () => {
+  it('with no landmassPolygons, behaves exactly as before (fully additive)', () => {
+    const params = { seed: 12, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, topLatitude: 60, bottomLatitude: -20 }
+    const withoutField = generateClimate(params, idSequence())
+    const withEmptyPolygons = generateClimate({ ...params, landmassPolygons: [] }, idSequence())
+    expect(withEmptyPolygons.climateZones.map((z) => z.points)).toEqual(withoutField.climateZones.map((z) => z.points))
+  })
+
   it('is deterministic for the same seed and params', () => {
     const params = { seed: 12, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, topLatitude: 60, bottomLatitude: -20 }
     const a = generateClimate(params, idSequence())
@@ -242,5 +249,75 @@ describe('generateClimate', () => {
     const withoutField = generateClimate(params, idSequence())
     const withEmptyZones = generateClimate({ ...params, elevatedZones: [] }, idSequence())
     expect(withEmptyZones.climateZones.map((z) => z.points)).toEqual(withoutField.climateZones.map((z) => z.points))
+  })
+
+  it('landmassPolygons excludes naturally-high ground outside the given shapes from ever getting a biome (regression: climate colored real ocean gaps between hand-drawn islands, since land/sea came from noise alone, oblivious to the actual drawn coastline)', () => {
+    const width = 1000
+    const height = 1000
+    const params = { seed: 5, widthPixels: width, heightPixels: height, seaLevel: 0.3, topLatitude: 40, bottomLatitude: -40 }
+    const unrestricted = generateClimate(params, idSequence())
+    expect(unrestricted.climateZones.some((z) => z.points.some((p) => p.x > width / 2))).toBe(true)
+
+    const leftHalf = [
+      { x: 0, y: 0 },
+      { x: width / 2, y: 0 },
+      { x: width / 2, y: height },
+      { x: 0, y: height }
+    ]
+    const restricted = generateClimate({ ...params, landmassPolygons: [leftHalf] }, idSequence())
+    for (const zone of restricted.climateZones) {
+      for (const p of zone.points) expect(p.x).toBeLessThanOrEqual(width / 2)
+    }
+  })
+
+  it('landmassPolygons lets a hand-drawn coastline receive a biome even where the freshly-invented elevation field alone would leave it blank ocean (regression: an interior gap in a real island silently got no biome at all)', () => {
+    const width = 800
+    const height = 800
+    // seaLevel comfortably above this run's own max naturally-occurring
+    // elevation (checked empirically at mountainDensity/mountainRuggedness
+    // 0 — see elevation.ts and hydrology.test.ts's identical setup) so every
+    // land cell in the "with polygon" run below is there ONLY because of
+    // landmassPolygons, not naturally.
+    const params = { seed: 5, widthPixels: width, heightPixels: height, seaLevel: 0.9, mountainDensity: 0, mountainRuggedness: 0 }
+    const withoutPolygon = generateClimate(params, idSequence())
+    expect(withoutPolygon.climateZones).toEqual([])
+
+    const fullCanvas = [
+      { x: 0, y: 0 },
+      { x: width, y: 0 },
+      { x: width, y: height },
+      { x: 0, y: height }
+    ]
+    const withPolygon = generateClimate({ ...params, landmassPolygons: [fullCanvas] }, idSequence())
+    expect(withPolygon.climateZones.length).toBeGreaterThan(0)
+    const centerBiome = withPolygon.climateZones.find((z) => polygonArea(z.points) > 0 && pointInPolygon({ x: width / 2, y: height / 2 }, z.points))
+    expect(centerBiome).toBeDefined()
+  })
+
+  it('a hand-painted elevated zone still reads as alpine independently of landmassPolygons (the two are separate concerns: one decides land vs. water, the other raises elevation within land)', () => {
+    const width = 800
+    const height = 800
+    const fullCanvas = [
+      { x: 0, y: 0 },
+      { x: width, y: 0 },
+      { x: width, y: height },
+      { x: 0, y: height }
+    ]
+    const mountainZone = { points: [{ x: 300, y: 300 }, { x: 500, y: 300 }, { x: 500, y: 500 }, { x: 300, y: 500 }], elevation: 0.9 }
+    const result = generateClimate(
+      {
+        seed: 5,
+        widthPixels: width,
+        heightPixels: height,
+        seaLevel: 0.9,
+        mountainDensity: 0,
+        mountainRuggedness: 0,
+        landmassPolygons: [fullCanvas],
+        elevatedZones: [mountainZone]
+      },
+      idSequence()
+    )
+    const zoneCenterBiome = result.climateZones.find((z) => polygonArea(z.points) > 0 && pointInPolygon({ x: 400, y: 400 }, z.points))
+    expect(zoneCenterBiome?.climateTypeId).toBe('alpine')
   })
 })
