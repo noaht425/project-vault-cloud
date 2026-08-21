@@ -202,6 +202,43 @@ describe('computeElevationGrid edgesAreOcean (world-map mode)', () => {
       }
     }
   })
+
+  it('shows real coastline texture, not a smooth mask-shaped circle (regression: noise feature scale was too large relative to a continent to add any visible variation)', () => {
+    // Same-distance-from-center points that a purely radial mask (no real
+    // noise texture) would read as nearly identical — sampled just inside
+    // the landmass's own core, well clear of both the mask's own outer
+    // falloff ring and the ridge/highland layer, so what's being measured
+    // is the base noise's own contribution, not either of those.
+    const grid = computeElevationGrid({ seed: 11, widthPixels: 800, heightPixels: 800, landmassScale: 0.35, edgesAreOcean: true, continentCount: 1 })
+    const cx = grid.cols / 2
+    const cy = grid.rows / 2
+    const sampleRadius = Math.min(grid.cols, grid.rows) * 0.12
+    const samples: number[] = []
+    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+      const x = Math.min(grid.cols - 1, Math.max(0, Math.round(cx + Math.cos(angle) * sampleRadius)))
+      const y = Math.min(grid.rows - 1, Math.max(0, Math.round(cy + Math.sin(angle) * sampleRadius)))
+      samples.push(grid.values[y][x])
+    }
+    const mean = samples.reduce((a, b) => a + b, 0) / samples.length
+    const variance = samples.reduce((sum, v) => sum + (v - mean) ** 2, 0) / samples.length
+    // A smooth, texture-free radial mask would put every one of these
+    // same-distance samples within a hair of `mean` (variance near 0) —
+    // real fractal noise at this scale should clearly separate them.
+    expect(Math.sqrt(variance)).toBeGreaterThan(0.02)
+  })
+
+  it('gives separate continents genuinely different sizes (regression: every continent at a given continentCount previously shared one identical global radius)', () => {
+    const result = generateTerrain(
+      { seed: 4, widthPixels: 1000, heightPixels: 1000, seaLevel: 0.4, edgesAreOcean: true, continentCount: 4 },
+      idSequence()
+    )
+    const areas = result.landmasses.map((l) => polygonArea(l.points)).sort((a, b) => a - b)
+    expect(areas.length).toBeGreaterThanOrEqual(2)
+    // The smallest landmass found is meaningfully smaller than the
+    // largest — not every continent landing at (within noise) the same
+    // uniform size.
+    expect(areas[0]).toBeLessThan(areas[areas.length - 1] * 0.85)
+  })
 })
 
 // A cheap centroid-based containment check (not full point-in-polygon) —

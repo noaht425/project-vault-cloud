@@ -81,6 +81,10 @@ function smoothstepBetween(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t)
 }
 
+interface ContinentCenter extends Point {
+  radius: number
+}
+
 // Scatters `count` landmass centers (in grid-cell units) across a roughly
 // even ceil(sqrt(count)) x ceil(sqrt(count)) partition of the grid — each
 // starts at its own partition's center, then wanders by at most 15% of
@@ -98,12 +102,23 @@ function smoothstepBetween(edge0: number, edge1: number, x: number): number {
 // edge cell reads below sea level. Tying the wander distance to
 // referenceRadius instead guarantees the same edge-fades-to-ocean margin
 // regardless of continentCount.
-function placeContinentCenters(seed: number, count: number, cols: number, rows: number, referenceRadius: number): Point[] {
+//
+// Each center also gets its OWN radius, 80%-120% of referenceRadius —
+// without this, every continent at a given continentCount came out an
+// identical size (confirmed: several generated world maps all showed
+// uniform, near-perfectly-circular landmasses, every one the exact same
+// size, since they all shared one global radius with zero per-continent
+// variation). Kept fairly tight (not e.g. +/-50%) because the worst-case
+// combination of max position jitter AND max radius both landing in the
+// same unlucky direction still has to stay inside referenceRadius's own
+// edge-safety margin (see computeElevationGrid's 0.3 factor) — the two
+// jitter amounts are sized together, not independently.
+function placeContinentCenters(seed: number, count: number, cols: number, rows: number, referenceRadius: number): ContinentCenter[] {
   const partitionSize = Math.ceil(Math.sqrt(count))
   const partitionWidth = cols / partitionSize
   const partitionHeight = rows / partitionSize
   const jitterAmount = referenceRadius * 0.15
-  const centers: Point[] = []
+  const centers: ContinentCenter[] = []
   for (let i = 0; i < count; i++) {
     const partitionX = i % partitionSize
     const partitionY = Math.floor(i / partitionSize)
@@ -111,24 +126,28 @@ function placeContinentCenters(seed: number, count: number, cols: number, rows: 
     const partitionCenterY = (partitionY + 0.5) * partitionHeight
     const jitterX = deterministicFraction(hashSeed(seed, i, 1)) * 2 - 1
     const jitterY = deterministicFraction(hashSeed(seed, i, 2)) * 2 - 1
-    centers.push({ x: partitionCenterX + jitterX * jitterAmount, y: partitionCenterY + jitterY * jitterAmount })
+    const radiusJitter = deterministicFraction(hashSeed(seed, i, 3))
+    centers.push({
+      x: partitionCenterX + jitterX * jitterAmount,
+      y: partitionCenterY + jitterY * jitterAmount,
+      radius: referenceRadius * (0.8 + radiusJitter * 0.4)
+    })
   }
   return centers
 }
 
-// 1 at/near the nearest landmass center, smoothly fading to 0 by the time a
-// cell is `referenceRadius` grid-cells away from every center — multiplied
-// straight into the raw noise elevation (see computeElevationGrid), the
-// standard "island mask" technique: it preserves the noise's own texture
-// near a continent's core while guaranteeing elevation collapses toward
-// ocean far from all of them, including every canvas edge. Takes the
-// nearest center's contribution only (not a sum) so two separate
-// continents' masks don't stack into implausibly high terrain in the gap
-// between them.
-function islandMaskAt(point: Point, centers: Point[], referenceRadius: number): number {
+// 1 at/near a landmass center, smoothly fading to 0 by the time a cell is
+// that center's own `radius` grid-cells away — multiplied straight into the
+// raw noise elevation (see computeElevationGrid), the standard "island
+// mask" technique: it preserves the noise's own texture near a continent's
+// core while guaranteeing elevation collapses toward ocean far from all of
+// them, including every canvas edge. Takes the nearest center's
+// contribution only (not a sum) so two separate continents' masks don't
+// stack into implausibly high terrain in the gap between them.
+function islandMaskAt(point: Point, centers: ContinentCenter[]): number {
   let strongest = 0
   for (const center of centers) {
-    const distance = Math.hypot(point.x - center.x, point.y - center.y) / referenceRadius
+    const distance = Math.hypot(point.x - center.x, point.y - center.y) / center.radius
     const mask = 1 - smoothstepBetween(0.55, 1, distance)
     if (mask > strongest) strongest = mask
   }
@@ -165,11 +184,12 @@ export function computeElevationGrid(params: ElevationGridParams): ElevationGrid
   // omitted/false) skips this entirely and generates exactly as it always
   // has. referenceRadius shrinks as continentCount grows so N landmasses
   // can each get their own reasonably-sized region instead of every mask
-  // blanketing the whole grid regardless of count. The 0.35 factor (rather
-  // than half the available space) leaves enough margin that even a
-  // maximally-jittered center (see placeContinentCenters) still fades to 0
-  // well before the canvas edge, not right at it.
-  const referenceRadius = (0.35 * Math.min(cols, rows)) / Math.sqrt(Math.max(1, continentCount))
+  // blanketing the whole grid regardless of count. The 0.3 factor (rather
+  // than half the available space) leaves enough margin that even the
+  // worst case — maximum position jitter AND maximum per-center radius
+  // (see placeContinentCenters) landing in the same direction at once —
+  // still fades to 0 comfortably before the canvas edge, not right at it.
+  const referenceRadius = (0.3 * Math.min(cols, rows)) / Math.sqrt(Math.max(1, continentCount))
   const continentCenters = edgesAreOcean ? placeContinentCenters(seed, Math.max(1, continentCount), cols, rows, referenceRadius) : []
 
   // Base continent shape (low frequency) plus a higher-frequency ridged
@@ -177,7 +197,19 @@ export function computeElevationGrid(params: ElevationGridParams): ElevationGrid
   // smoothstepBetween/HIGHLAND_*) so mountains read as "ranges carved into
   // highlands" rather than isolated spikes anywhere elevation happens to
   // roll high.
-  const featureScale = Math.max(1, gridResolution * landmassScale)
+  //
+  // In world mode, noise detail scales to a FRACTION of one continent's own
+  // radius, not the whole canvas — otherwise a single noise "blob" easily
+  // spans an entire continent's mask with no room left for coastline
+  // variation inside it, so the mask's own smooth circular falloff ends up
+  // being the only thing visibly shaping the landmass (confirmed: every
+  // generated world map showed uniform, near-perfectly-circular
+  // continents, all the same size, regardless of continentCount — the
+  // noise was providing essentially zero texture at that scale). Section
+  // mode (edgesAreOcean off) is unaffected and keeps its original
+  // whole-canvas-relative scale.
+  const noiseBaseSize = edgesAreOcean ? referenceRadius * 0.5 : gridResolution
+  const featureScale = Math.max(1, noiseBaseSize * landmassScale)
   const values: number[][] = []
   for (let y = 0; y < rows; y++) {
     const row: number[] = []
@@ -186,7 +218,7 @@ export function computeElevationGrid(params: ElevationGridParams): ElevationGrid
       // Multiplied in BEFORE the ridge/highland layer, so mountains only
       // ever carve into land the mask already committed to keeping — never
       // right at a continent's own fading-to-ocean edge.
-      const maskedBase = edgesAreOcean ? base * islandMaskAt({ x, y }, continentCenters, referenceRadius) : base
+      const maskedBase = edgesAreOcean ? base * islandMaskAt({ x, y }, continentCenters) : base
       const ridge = fractalNoise2D(seed + 7919, x, y, { scale: featureScale * 0.25, octaves: 4 })
       const highlandFactor = smoothstepBetween(HIGHLAND_START, HIGHLAND_END, maskedBase)
       row.push(maskedBase + ridge * mountainRuggedness * mountainDensity * highlandFactor)
