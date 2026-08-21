@@ -448,8 +448,12 @@ function syllableScore(syllable: PhoneticSyllable, profile: PhoneticProfile): nu
   return BASE_SYLLABLE_WEIGHT + syllable.tags.reduce((sum, tag) => sum + (profile.tagWeights[tag] ?? TAG_DEFAULT_WEIGHT), 0)
 }
 
-function pickSyllable(position: SyllablePosition, profile: PhoneticProfile, rng: () => number): string {
-  const pool = SYLLABLE_BANK.filter((s) => s.position === position)
+// Parameterized over the syllable bank (rather than closing over SYLLABLE_BANK
+// directly) so placeNames.ts can reuse this exact tested engine against its
+// own real-world-flavored bank instead of duplicating the scoring/retry/
+// pronounceability logic.
+function pickSyllable(bank: PhoneticSyllable[], position: SyllablePosition, profile: PhoneticProfile, rng: () => number): string {
+  const pool = bank.filter((s) => s.position === position)
   if (pool.length === 0) return ''
   const total = pool.reduce((sum, s) => sum + syllableScore(s, profile), 0)
   let roll = rng() * total
@@ -502,14 +506,14 @@ function isPronounceable(word: string): boolean {
 // attempts costs nothing but a few extra rng() calls in the rare case.
 const MAX_SYNTHESIS_ATTEMPTS = 20
 
-function synthesizeWord(profile: PhoneticProfile, rng: () => number): string {
+export function synthesizeWord(bank: PhoneticSyllable[], profile: PhoneticProfile, rng: () => number): string {
   let fallback = ''
   for (let attempt = 0; attempt < MAX_SYNTHESIS_ATTEMPTS; attempt++) {
     const count = Math.floor(rng() * (profile.syllableMax - profile.syllableMin + 1)) + profile.syllableMin
     const parts: string[] = []
     for (let i = 0; i < count; i++) {
       const position: SyllablePosition = i === 0 ? 'start' : i === count - 1 ? 'end' : 'middle'
-      parts.push(pickSyllable(position, profile, rng))
+      parts.push(pickSyllable(bank, position, profile, rng))
     }
     const word = parts.join('')
     if (attempt === 0) fallback = word
@@ -520,7 +524,7 @@ function synthesizeWord(profile: PhoneticProfile, rng: () => number): string {
   return capitalize(fallback)
 }
 
-function capitalize(word: string): string {
+export function capitalize(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1)
 }
 
@@ -532,5 +536,5 @@ function capitalize(word: string): string {
  * is in use.
  */
 export function generateSyntheticName(profile: PhoneticProfile, rng: () => number = Math.random): string {
-  return `${synthesizeWord(profile, rng)} ${synthesizeWord(profile, rng)}`
+  return `${synthesizeWord(SYLLABLE_BANK, profile, rng)} ${synthesizeWord(SYLLABLE_BANK, profile, rng)}`
 }

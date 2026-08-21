@@ -15,7 +15,7 @@ function event(overrides: Partial<EventSummary> = {}): EventSummary {
 }
 
 function pin(overrides: Partial<MapPin> = {}): MapPin {
-  return { id: 'pin-1', x: 0, y: 0, locationTitle: 'Townsville', label: '', generated: false, ...overrides }
+  return { id: 'pin-1', x: 0, y: 0, locationTitle: 'Townsville', label: '', generated: false, namingStyleId: null, ...overrides }
 }
 
 describe('matchEventsToPins', () => {

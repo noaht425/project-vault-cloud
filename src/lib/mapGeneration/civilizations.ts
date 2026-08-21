@@ -12,7 +12,7 @@ import type { MapPin, Territory } from '../noteTypes/map'
 import { computeElevationGrid, terrainDifficulty, MOUNTAIN_ELEVATION_THRESHOLD, type ElevationGridParams } from './elevation'
 import { computeFlowAccumulation } from './hydrology'
 import { polygonArea, signedPolygonArea, smoothPolygon, traceRegionBoundaries } from './contour'
-import { generateName, resolveNameBank } from '../settlementNames'
+import { generatePlaceName, PLACE_NAME_STYLES } from '../placeNames'
 import { deterministicFraction, hashSeed } from '../rng'
 
 const NEIGHBOR_OFFSETS: Point[] = [
@@ -39,22 +39,23 @@ export interface CivilizationGenerationResult {
 
 const MIN_TERRITORY_AREA_FRACTION = 0.003
 
-// Placeholder settlement/nation naming — this codebase has no dedicated
-// place-name generator (settlement notes are user-titled today), so this
-// borrows settlementNames.ts's person-name generator against the baseline
-// "human" bank purely as a plausible-sounding deterministic label. Still
-// procedural selection from a curated bank, not AI-written text, so it's
-// consistent with this whole feature's "no AI-generated content" premise —
-// just repurposed rather than purpose-built. Phase 4 (the settlement
-// generator hookup) is the natural place to replace this with something
-// better if a real place-name system gets built later.
-function placeholderName(seed: number, index: number): string {
-  const bank = resolveNameBank('human')
-  const rng = (() => {
-    let counter = 0
-    return () => deterministicFraction(hashSeed(seed, index, counter++))
-  })()
-  return generateName(bank, 'Neutral', rng)
+// Settlement/nation naming, via placeNames.ts's syllable-synthesis engine —
+// each civilization gets a naming style cycling deterministically through
+// PLACE_NAME_STYLES by civilization index (same "cycle by index" shape as
+// the territory hue below), so first-generation output already sounds
+// distinct per nation without any configuration. The style is stored on the
+// territory (namingStyleId) so the Civilizations panel can show/override it
+// afterward, and so "Generate settlement from pin"/a per-pin regenerate
+// action can resolve the same style later.
+function civilizationNamingStyle(civIndex: number) {
+  return PLACE_NAME_STYLES[civIndex % PLACE_NAME_STYLES.length]
+}
+
+function placeName(seed: number, index: number, styleId: string): string {
+  const style = PLACE_NAME_STYLES.find((s) => s.id === styleId) ?? null
+  let counter = 0
+  const rng = (): number => deterministicFraction(hashSeed(seed, index, counter++))
+  return generatePlaceName(style, rng)
 }
 
 export function generateCivilizations(params: CivilizationGenerationParams, idFactory: () => string = () => crypto.randomUUID()): CivilizationGenerationResult {
@@ -162,7 +163,8 @@ export function generateCivilizations(params: CivilizationGenerationParams, idFa
       .map((loop) => smoothPolygon(loop.map((p) => ({ x: p.x * pixelsPerCellX, y: p.y * pixelsPerCellY })), 2))
       .filter((poly) => polygonArea(poly) >= territoryMinAreaFraction * totalPixelArea)
 
-    const capitalName = placeholderName(seed, civIndex)
+    const namingStyle = civilizationNamingStyle(civIndex)
+    const capitalName = placeName(seed, civIndex, namingStyle.id)
     // Spaced evenly around the color wheel by civilization index — a fixed
     // saturation/lightness keeps every territory looking like a "tint",
     // not competing in brightness with the terrain/climate layers already
@@ -177,6 +179,7 @@ export function generateCivilizations(params: CivilizationGenerationParams, idFa
         color,
         presetNoteTitle: null,
         capitalPinId: capitalPinIds[civIndex],
+        namingStyleId: namingStyle.id,
         generated: true
       })
     }
@@ -185,13 +188,21 @@ export function generateCivilizations(params: CivilizationGenerationParams, idFa
   const pins: MapPin[] = allSettlements.map((site, i) => {
     const isCapital = i < capitals.length
     const civIndex = isCapital ? i : (owner[site.y][site.x] >= 0 ? owner[site.y][site.x] : 0)
-    const name = isCapital ? placeholderName(seed, civIndex) : placeholderName(seed, capitals.length + i)
+    const namingStyleId = civilizationNamingStyle(civIndex).id
+    const name = isCapital ? placeName(seed, civIndex, namingStyleId) : placeName(seed, capitals.length + i, namingStyleId)
     return {
       id: isCapital ? capitalPinIds[civIndex] : idFactory(),
       x: (site.x + 0.5) * pixelsPerCellX,
       y: (site.y + 0.5) * pixelsPerCellY,
       locationTitle: null,
       label: name,
+      // Explicit rather than null — a non-capital pin whose owning cell
+      // isn't actually claimed by any territory (owner < 0, falls back to
+      // civ 0 above) should still record which style actually named it,
+      // rather than leaving namingStyleId null (which would mean "inherit
+      // the containing territory" — misleading if it isn't really inside
+      // one).
+      namingStyleId,
       generated: true
     }
   })

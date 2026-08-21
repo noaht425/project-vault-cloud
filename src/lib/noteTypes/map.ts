@@ -108,7 +108,14 @@ export const mapPinSchema = z.object({
   // after being linked to a real Settlement note via "Generate settlement
   // from pin", so it's still distinguishable from a pin the user placed
   // themselves and later linked by hand.
-  generated: z.boolean().catch(false)
+  generated: z.boolean().catch(false),
+  // Which placeNames.ts PLACE_NAME_STYLES entry this pin's own label should
+  // be (re)generated from — null means "inherit the containing territory's
+  // namingStyleId" (or, if that's also null, a random style per generation
+  // — see placeNames.ts's generatePlaceName). Lets one border city sound
+  // like a different culture than the rest of its kingdom without giving
+  // every pin a mandatory style choice.
+  namingStyleId: z.string().nullable().catch(null)
 })
 
 export function pinDisplayLabel(pin: { locationTitle: string | null; label: string }): string {
@@ -161,6 +168,11 @@ export const territorySchema = z.object({
   // is just which of this territory's own pins is the seat of power, same
   // reasoning as capitalPinId not being a wiki-link.
   capitalPinId: z.string().nullable().catch(null),
+  // Which placeNames.ts PLACE_NAME_STYLES entry this nation's own name and
+  // (by default) every one of its cities' names should be generated from —
+  // null means "random style" (see placeNames.ts's generatePlaceName). A
+  // pin can still override this individually via its own namingStyleId.
+  namingStyleId: z.string().nullable().catch(null),
   generated: z.boolean().catch(false)
 })
 
