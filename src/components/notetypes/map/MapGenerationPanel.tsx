@@ -174,6 +174,13 @@ export function MapGenerationPanel({
   const [seaLevel, setSeaLevel] = useState(Number(savedParams.seaLevel ?? 0.5));
   const [mountainDensity, setMountainDensity] = useState(Number(savedParams.mountainDensity ?? 0.35));
   const [mountainRuggedness, setMountainRuggedness] = useState(Number(savedParams.mountainRuggedness ?? 0.5));
+  // "This map is a whole world" (see mapGeneration/elevation.ts's
+  // edgesAreOcean/continentCount) — off by default so every map generated
+  // before this existed keeps behaving exactly as it always has (land can
+  // run off any edge, appropriate for a map depicting just a cropped
+  // section of a larger landmass).
+  const [edgesAreOcean, setEdgesAreOcean] = useState(Boolean(savedParams.edgesAreOcean ?? false));
+  const [continentCount, setContinentCount] = useState(Number(savedParams.continentCount ?? 1));
   const [generatingTerrain, setGeneratingTerrain] = useState(false);
 
   const [riverDensity, setRiverDensity] = useState(Number(savedParams.riverDensity ?? 0.5));
@@ -354,7 +361,7 @@ export function MapGenerationPanel({
   // record rather than replacing it wholesale — running just the Climate
   // section, say, shouldn't erase the record of what Terrain/Hydrology
   // params produced the rest of the map.
-  const mergeGeneration = (sectionParams: Record<string, number | string>) => ({
+  const mergeGeneration = (sectionParams: Record<string, number | string | boolean>) => ({
     seed,
     params: { ...savedParams, ...sectionParams },
     parentMapTitle: data.generation?.parentMapTitle ?? null,
@@ -376,6 +383,8 @@ export function MapGenerationPanel({
         mountainRuggedness,
         mountainTerrainTypeId,
         boundaryMask: activeBoundaryMask,
+        edgesAreOcean,
+        continentCount,
       });
       // Only ever replaces content THIS generator previously produced
       // (generated:true) — anything hand-drawn survives untouched — AND,
@@ -388,7 +397,7 @@ export function MapGenerationPanel({
         landmasses: [...keptLandmasses, ...result.landmasses],
         zones: [...keptZones, ...result.mountainZones],
         terrainTypes: newType ? [...data.terrainTypes, newType] : data.terrainTypes,
-        generation: mergeGeneration({ landmassScale, seaLevel, mountainDensity, mountainRuggedness }),
+        generation: mergeGeneration({ landmassScale, seaLevel, mountainDensity, mountainRuggedness, edgesAreOcean, continentCount }),
       });
     } finally {
       setGeneratingTerrain(false);
@@ -411,6 +420,8 @@ export function MapGenerationPanel({
         riverDensity,
         riverLineTypeId,
         boundaryMask: activeBoundaryMask,
+        edgesAreOcean,
+        continentCount,
       });
       // Scoped to riverLineTypeId, not just "!generated" — roads are also
       // generated lines sharing this same array, and regenerating rivers
@@ -468,6 +479,8 @@ export function MapGenerationPanel({
         anchors,
         anchorRadiusPixels,
         elevatedZones,
+        edgesAreOcean,
+        continentCount,
       });
       const existingTypeIds = new Set(data.climateTypes.map((t) => t.id));
       const newTypes = result.climateTypes.filter((t) => !existingTypeIds.has(t.id));
@@ -497,6 +510,8 @@ export function MapGenerationPanel({
         civilizationCount,
         settlementCount,
         boundaryMask: activeBoundaryMask,
+        edgesAreOcean,
+        continentCount,
       });
       // Territories can now be hand-drawn too (Draw Territory, MapForm.tsx),
       // so — same as every other layer — only ever replaces entries this
@@ -535,6 +550,8 @@ export function MapGenerationPanel({
           roadDensity,
           roadLineTypeId,
           boundaryMask: activeBoundaryMask,
+          edgesAreOcean,
+          continentCount,
         },
         generatedSettlementPoints
       );
@@ -694,6 +711,21 @@ export function MapGenerationPanel({
             <span>Mountain ruggedness ({mountainRuggedness.toFixed(2)}) — how jagged the mountain ranges are.</span>
             <input type="range" min={0} max={1} step={0.01} value={mountainRuggedness} onChange={(e) => setMountainRuggedness(Number(e.target.value))} />
           </label>
+          <label className="flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={edgesAreOcean} onChange={(e) => setEdgesAreOcean(e.target.checked)} />
+            This map is a whole world (surrounded by ocean)
+          </label>
+          <p className="text-sm text-muted">
+            {edgesAreOcean
+              ? "Land is pulled toward ocean near every canvas edge, so this reads as a self-contained world instead of an arbitrary crop of a bigger continent."
+              : "Off (default): land can run off any edge — pick this if the map is meant to depict just a section of a larger landmass."}
+          </p>
+          {edgesAreOcean && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span>Continents ({continentCount}) — a strong bias toward this many separate landmasses, not an exact guarantee.</span>
+              <input type="range" min={1} max={8} step={1} value={continentCount} onChange={(e) => setContinentCount(Number(e.target.value))} />
+            </label>
+          )}
           <Button variant="primary" disabled={!workingDims || generatingTerrain} onClick={generateTerrainNow}>
             {generatingTerrain ? "Generating…" : data.generation ? "Regenerate terrain" : "Generate terrain"}
           </Button>

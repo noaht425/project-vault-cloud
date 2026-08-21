@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateTerrain } from '../src/lib/mapGeneration/elevation'
+import { computeElevationGrid, generateTerrain } from '../src/lib/mapGeneration/elevation'
 import { polygonArea, signedPolygonArea } from '../src/lib/mapGeneration/contour'
 
 function idSequence(): () => string {
@@ -121,6 +121,84 @@ describe('generateTerrain', () => {
         expect(p.x).toBeLessThanOrEqual(510)
         expect(p.y).toBeGreaterThanOrEqual(90)
         expect(p.y).toBeLessThanOrEqual(510)
+      }
+    }
+  })
+})
+
+describe('computeElevationGrid edgesAreOcean (world-map mode)', () => {
+  it('leaves every existing caller unchanged when omitted (fully additive)', () => {
+    const params = { seed: 3, widthPixels: 1000, heightPixels: 1000, mountainDensity: 0.9, mountainRuggedness: 0.9 }
+    const withoutField = computeElevationGrid(params)
+    const explicitlyOff = computeElevationGrid({ ...params, edgesAreOcean: false })
+    expect(explicitlyOff.values).toEqual(withoutField.values)
+  })
+
+  it('pulls every canvas edge below a typical sea level, even at high mountain density', () => {
+    // mountainDensity/mountainRuggedness cranked up specifically because a
+    // hot ridge value is the most likely way an edge cell could otherwise
+    // sneak above sea level despite the base noise being masked down.
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const grid = computeElevationGrid({
+        seed,
+        widthPixels: 800,
+        heightPixels: 800,
+        mountainDensity: 1,
+        mountainRuggedness: 1,
+        edgesAreOcean: true,
+        continentCount: 1
+      })
+      const seaLevel = 0.5
+      for (let x = 0; x < grid.cols; x++) {
+        expect(grid.values[0][x]).toBeLessThan(seaLevel)
+        expect(grid.values[grid.rows - 1][x]).toBeLessThan(seaLevel)
+      }
+      for (let y = 0; y < grid.rows; y++) {
+        expect(grid.values[y][0]).toBeLessThan(seaLevel)
+        expect(grid.values[y][grid.cols - 1]).toBeLessThan(seaLevel)
+      }
+    }
+  })
+
+  it('a single continent leaves the grid center as the most-elevated-on-average region', () => {
+    const grid = computeElevationGrid({ seed: 7, widthPixels: 800, heightPixels: 800, edgesAreOcean: true, continentCount: 1 })
+    const cx = Math.floor(grid.cols / 2)
+    const cy = Math.floor(grid.rows / 2)
+    // Averaged over a small patch (not a single noisy cell) to compare the
+    // island mask's overall shape rather than one lucky/unlucky sample.
+    const average = (x0: number, y0: number, size: number): number => {
+      let sum = 0
+      let count = 0
+      for (let y = y0; y < y0 + size && y < grid.rows; y++) {
+        for (let x = x0; x < x0 + size && x < grid.cols; x++) {
+          sum += grid.values[y][x]
+          count++
+        }
+      }
+      return sum / count
+    }
+    const centerAvg = average(cx - 4, cy - 4, 8)
+    const cornerAvg = average(0, 0, 8)
+    expect(centerAvg).toBeGreaterThan(cornerAvg)
+  })
+
+  it('a real generateTerrain run with edgesAreOcean produces a landmass that never touches the canvas edge', () => {
+    // A real margin (not just a 1px smoothing-jitter tolerance) — the whole
+    // point of edgesAreOcean is a visible band of guaranteed ocean around
+    // the landmass, not land that merely stops exactly at the boundary.
+    const margin = 15
+    for (const seed of [1, 2, 3]) {
+      const width = 800
+      const height = 800
+      const result = generateTerrain({ seed, widthPixels: width, heightPixels: height, seaLevel: 0.3, edgesAreOcean: true, continentCount: 1 }, idSequence())
+      expect(result.landmasses.length).toBeGreaterThan(0)
+      for (const landmass of result.landmasses) {
+        for (const p of landmass.points) {
+          expect(p.x).toBeGreaterThan(margin)
+          expect(p.x).toBeLessThan(width - margin)
+          expect(p.y).toBeGreaterThan(margin)
+          expect(p.y).toBeLessThan(height - margin)
+        }
       }
     }
   })
