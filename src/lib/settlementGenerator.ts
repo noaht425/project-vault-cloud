@@ -16,6 +16,7 @@ import {
   type RelationType,
   type ReligionShare,
   type SettlementBuilding,
+  type SettlementFrontmatter,
   type SettlementResident,
   type SpecialtyDef,
   type WealthTier
@@ -26,6 +27,7 @@ import {
   generateGoal,
   generateName,
   generatePersonalityLine,
+  NAME_INSPIRATION_SOURCES,
   resolveNameBank,
   type NameBank
 } from './settlementNames'
@@ -734,6 +736,42 @@ export interface ExistingSettlementData {
   residents: SettlementResident[]
 }
 
+// Builds the full GenerationOptions from a parsed Settlement note's own
+// frontmatter — every generation input on the note mirrors a
+// GenerationOptions field by the same name (see settlementFrontmatterSchema
+// / SettlementSetupTab's own inline mapping). Extracted so the city-map
+// "Generate buildings" action can (re)generate a settlement's population
+// (decision 3) without duplicating that 20-field mapping. Name/phonetic
+// sources default to the app's baseline banks, same as every other caller.
+export function generationOptionsFromFrontmatter(fm: SettlementFrontmatter): GenerationOptions {
+  return {
+    population: fm.targetPopulation,
+    sizeId: fm.sizeId,
+    districts: fm.districts,
+    raceDistribution: fm.raceDistribution,
+    customRaces: fm.customRaces,
+    inspirationSources: NAME_INSPIRATION_SOURCES,
+    phoneticProfiles: PHONETIC_PROFILES,
+    wealthTiers: fm.wealthTiers,
+    religionDistribution: fm.religionDistribution,
+    genderDistribution: fm.genderDistribution,
+    raceRelations: fm.raceRelations,
+    genderRelations: fm.genderRelations,
+    buildingTypes: fm.buildingTypes,
+    specialties: fm.specialties,
+    activeSpecialtyIds: fm.activeSpecialtyIds,
+    raceLifeStages: fm.raceLifeStages,
+    religiousWorkerMultiplier: fm.religiousWorkerMultiplier,
+    religiousPracticePercent: fm.religiousPracticePercent,
+    customEducation: fm.customEducation,
+    educatedWealthTierIds: fm.educatedWealthTierIds,
+    customFactions: fm.customFactions,
+    useRandomFactionDefaults: fm.useRandomFactionDefaults,
+    randomFactionCount: fm.randomFactionCount,
+    randomFactionMaxMembers: fm.randomFactionMaxMembers
+  }
+}
+
 export interface GeneratedSettlementData {
   buildings: SettlementBuilding[]
   residents: SettlementResident[]
@@ -757,8 +795,19 @@ export function generateSettlement(
   rng: () => number = Math.random,
   idFactory: () => string = () => crypto.randomUUID()
 ): GeneratedSettlementData {
-  const keptBuildings = existing.buildings.filter((b) => b.linkedNoteTitle)
-  const keptResidents = existing.residents.filter((r) => r.linkedNoteTitle)
+  // A building keeps its place across regeneration if it's been promoted to
+  // a real note (linkedNoteTitle) OR it's been given a spatial footprint on
+  // a city-scale street map (procedural map generation plan, decision 5 —
+  // regenerating a town's population must not silently reshuffle every
+  // already-placed building). A footprint-only building also keeps the
+  // residents who staff it (so its people don't vanish on regen) — a
+  // *promoted* building keeps its own contract of refilling unpromoted
+  // staff, unchanged.
+  const keptBuildings = existing.buildings.filter((b) => b.linkedNoteTitle || b.footprint)
+  const footprintOnlyBuildingIds = new Set(existing.buildings.filter((b) => b.footprint && !b.linkedNoteTitle).map((b) => b.id))
+  const keptResidents = existing.residents.filter(
+    (r) => r.linkedNoteTitle || (r.professionBuildingId !== null && footprintOnlyBuildingIds.has(r.professionBuildingId))
+  )
 
   const districts = options.districts.length > 0 ? options.districts : [{ id: 'main', name: 'Main District', buildingTypeBoosts: [] }]
   const wealthTiers = options.wealthTiers

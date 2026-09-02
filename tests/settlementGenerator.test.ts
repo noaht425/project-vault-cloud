@@ -153,6 +153,49 @@ describe('generateSettlement', () => {
     expect(result.residents.find((r) => r.id === 'unpromoted')).toBeUndefined()
   })
 
+  it('keeps a building with a city-map footprint (and its staff) across regeneration, like a promoted one (Phase 7.4, decision 5)', () => {
+    const placedBuilding: SettlementBuilding = {
+      id: 'placed-building',
+      name: 'Corner Bakery',
+      buildingTypeId: 'bakery',
+      wealthTierId: 'middle',
+      districtId: 'main',
+      linkedNoteTitle: null,
+      inventory: [],
+      footprint: { x: 40, y: 55, width: 18, height: 14, rotationDegrees: 8 }
+    }
+    const staffResident: SettlementResident = {
+      id: 'placed-staff',
+      name: 'Mirena',
+      race: 'human',
+      age: 34,
+      gender: 'Female',
+      professionBuildingId: 'placed-building',
+      jobTitle: 'Baker',
+      employmentStatus: 'employed',
+      homeless: false,
+      homeBuildingId: null,
+      wealthTierId: 'middle',
+      districtId: 'main',
+      religion: 'The Old Faith',
+      notable: true,
+      flavorTag: '',
+      personalityLine: '',
+      goal: '',
+      stats: { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 },
+      proficiencies: [],
+      appearance: '',
+      relatives: [],
+      educated: false,
+      linkedNoteTitle: null
+    }
+    const result = generateSettlement(baseOptions({ population: 300 }), { buildings: [placedBuilding], residents: [staffResident] }, seededRng(11), sequenceIds('r'))
+    // The footprint building comes back byte-for-byte, and its unpromoted
+    // staff resident is kept with it rather than regenerated away.
+    expect(result.buildings).toContainEqual(placedBuilding)
+    expect(result.residents.find((r) => r.id === 'placed-staff')?.professionBuildingId).toBe('placed-building')
+  })
+
   it('applies a soft (not hard) size floor to building types above the current size tier', () => {
     // allocateByWeight is a pure function of weights, with no rng involved,
     // so with equal base weights this comparison is exact and seed-

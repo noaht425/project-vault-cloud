@@ -20,6 +20,10 @@ export async function GET(request: Request) {
   // Only meaningful alongside type=map, but harmless (just an extra no-op
   // filter) if passed without it.
   const parentMapTitle = searchParams.get("parentMapTitle") ?? undefined;
+  // Phase 7.6 (city-scale street maps): finds the Map note that is a given
+  // Settlement note's street layout, without fetching every map's full
+  // frontmatter — same server-side JSON-path filter as parentMapTitle above.
+  const cityLinkSettlementTitle = searchParams.get("cityLinkSettlementTitle") ?? undefined;
   // An empty query with NO type filter is a genuinely-empty autocomplete
   // box — short-circuiting to [] avoids an unfiltered near-global list for
   // that case. But an empty query WITH a type filter (e.g. "every
@@ -54,6 +58,7 @@ export async function GET(request: Request) {
     .limit(500);
   if (type) query = query.eq("note_type", type);
   if (parentMapTitle) query = query.eq("frontmatter->generation->>parentMapTitle", parentMapTitle);
+  if (cityLinkSettlementTitle) query = query.eq("frontmatter->cityLink->>settlementNoteTitle", cityLinkSettlementTitle);
 
   const { data: notes, error } = await query;
   if (error) return dbErrorResponse(error, "GET /api/notes search");

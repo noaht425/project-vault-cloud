@@ -34,6 +34,31 @@ describe('mapFrontmatterSchema backward compatibility', () => {
     expect(fresh.generation).toBeNull()
     expect(fresh.territories).toEqual([])
   })
+
+  it('defaults cityBoundary to null on a map that predates the city-scale layer (Phase 7.1)', () => {
+    const parsed = mapFrontmatterSchema.parse({ type: 'map', image: { path: 'f.png', width: 100, height: 100 } })
+    expect(parsed.cityBoundary).toBeNull()
+    expect(defaultMapFrontmatter().cityBoundary).toBeNull()
+  })
+
+  it('round-trips a generated cityBoundary, defaulting walled when absent', () => {
+    const withWall = mapFrontmatterSchema.parse({
+      type: 'map',
+      cityBoundary: { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 9 }], walled: true }
+    })
+    expect(withWall.cityBoundary).toEqual({ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 9 }], walled: true })
+
+    const noWallField = mapFrontmatterSchema.parse({ type: 'map', cityBoundary: { points: [{ x: 1, y: 2 }] } })
+    expect(noWallField.cityBoundary?.walled).toBe(false)
+  })
+
+  it('defaults cityLink to null and round-trips a settlement link (Phase 7.2)', () => {
+    expect(mapFrontmatterSchema.parse({ type: 'map' }).cityLink).toBeNull()
+    const linked = mapFrontmatterSchema.parse({ type: 'map', cityLink: { settlementNoteTitle: 'Bramblewick' } })
+    expect(linked.cityLink).toEqual({ settlementNoteTitle: 'Bramblewick' })
+    // A malformed link (missing the title) degrades to null rather than throwing.
+    expect(mapFrontmatterSchema.parse({ type: 'map', cityLink: { foo: 1 } }).cityLink).toBeNull()
+  })
 })
 
 describe('generated flag round-trips explicitly on every generatable layer', () => {

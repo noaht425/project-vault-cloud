@@ -14,8 +14,13 @@ import { generateRivers, type HydrologyGenerationParams } from './hydrology'
 import { generateClimate, type ClimateGenerationParams, type ClimateGenerationResult } from './climate'
 import { generateCivilizations, type CivilizationGenerationParams, type CivilizationGenerationResult } from './civilizations'
 import { generateRoads, type RoadGenerationParams } from './roads'
+import { generateCityBoundary, type CityBoundaryParams, type CityBoundaryResult } from './cityBoundary'
+import { generateCityDistricts, type CityDistrictGenerationParams, type CityDistrictResult } from './districts'
+import { generateStreets, traceBlocks, type StreetGenerationParams, type StreetGenerationResult } from './streets'
+import { subdivideBlock, type LotRect } from './lots'
+import { placeBuildingsInLots, type CityLayoutParams, type CityLayoutResult } from './cityLayout'
 
-export { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads }
+export { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads, generateCityBoundary, generateCityDistricts, generateStreets, traceBlocks, subdivideBlock, placeBuildingsInLots }
 export type {
   TerrainGenerationParams,
   TerrainGenerationResult,
@@ -24,7 +29,16 @@ export type {
   ClimateGenerationResult,
   CivilizationGenerationParams,
   CivilizationGenerationResult,
-  RoadGenerationParams
+  RoadGenerationParams,
+  CityBoundaryParams,
+  CityBoundaryResult,
+  CityDistrictGenerationParams,
+  CityDistrictResult,
+  StreetGenerationParams,
+  StreetGenerationResult,
+  LotRect,
+  CityLayoutParams,
+  CityLayoutResult
 }
 
 export type GenerationParams = TerrainGenerationParams & HydrologyGenerationParams & ClimateGenerationParams & CivilizationGenerationParams & RoadGenerationParams

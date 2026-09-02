@@ -20,9 +20,13 @@ type SettlementTab = "setup" | "people" | "buildings" | "factions";
 // re-uploading the full arrays to Storage on each one (when large enough to
 // need it) is fine.
 export function SettlementForm({
+  noteName,
   frontmatter,
   onChange,
 }: {
+  // This settlement note's own title — Phase 7.6 needs it to cityLink a
+  // generated street map back to this settlement.
+  noteName: string;
   frontmatter: Record<string, unknown>;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
@@ -138,7 +142,7 @@ export function SettlementForm({
           ultrawide monitor the way People/Buildings' own tables should. */}
       {tab === "setup" && (
         <div className="md:max-w-5xl md:mx-auto md:w-full">
-          <SettlementSetupTab data={data} updateFrontmatter={updateFrontmatter} />
+          <SettlementSetupTab noteName={noteName} data={data} updateFrontmatter={updateFrontmatter} />
         </div>
       )}
       {tab === "people" && <SettlementPeopleTab data={data} updateFrontmatter={updateFrontmatter} />}

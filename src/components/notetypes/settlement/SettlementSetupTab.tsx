@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   BUILDING_CATEGORIES,
@@ -25,6 +25,7 @@ import {
   settlementPresetFrontmatterSchema,
 } from "@/lib/noteTypes/settlementPreset";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
+import { defaultMapFrontmatter } from "@/lib/noteTypes/map";
 import { TextField } from "@/components/ui/TextField";
 import { SelectField } from "@/components/ui/SelectField";
 import { Button } from "@/components/ui/Button";
@@ -80,9 +81,11 @@ const RELIGIOUS_WORKER_PRESETS = [
 // Wealth tiers, Education, Religion distribution, Worshippers, Factions,
 // Building types table, Generate — ports in full.
 export function SettlementSetupTab({
+  noteName,
   data,
   updateFrontmatter,
 }: {
+  noteName: string;
   data: SettlementFrontmatter;
   updateFrontmatter: (patch: Record<string, unknown>) => Promise<void>;
 }) {
@@ -368,6 +371,11 @@ export function SettlementSetupTab({
             Reset to defaults
           </Button>
         </div>
+      </section>
+
+      <section>
+        <h3 className="font-medium mb-1">Street map</h3>
+        <StreetMapSection noteName={noteName} sizeId={data.sizeId} />
       </section>
 
       <section>
@@ -993,6 +1001,82 @@ function RaceCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Square canvas (px) for a generated street map, by the settlement's own
+// gating size tier (decision 8 — the size system drives the budget, no
+// separate city-map size dial). A hamlet needs little room; a metropolis a
+// lot. Boundary/districts/streets/buildings are all generated inside this.
+const CITY_CANVAS_BY_SIZE: Record<string, number> = { hamlet: 700, village: 1000, town: 1500, city: 2200, metropolis: 3000 };
+
+// Phase 7.6 — the "Generate street map" / "View street map" entry point on
+// a Settlement note. Creates a Map note cityLinked to this settlement (the
+// actual boundary/district/street/building generation happens in that map
+// note's own Generate panel, phases 7.1-7.4), and links to it once one
+// exists. Its own fetch/state so the big Setup tab isn't rerun on it.
+function StreetMapSection({ noteName, sizeId }: { noteName: string; sizeId: string }) {
+  const router = useRouter();
+  const [linkedMaps, setLinkedMaps] = useState<NoteSummary[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchJson<NoteSummary[]>(`/api/notes?type=map&cityLinkSettlementTitle=${encodeURIComponent(noteName)}`)
+      .then((maps) => !cancelled && setLinkedMaps(maps))
+      .catch(() => !cancelled && setLinkedMaps([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [noteName]);
+
+  const generate = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const size = CITY_CANVAS_BY_SIZE[resolveGatingSizeId(sizeId)] ?? 1500;
+      const frontmatter = {
+        ...defaultMapFrontmatter(),
+        canvasSize: { width: size, height: size },
+        cityLink: { settlementNoteTitle: noteName },
+        generation: { seed: Math.floor(Math.random() * 1_000_000_000), params: {}, parentMapTitle: null, parentBounds: null },
+      };
+      const res = await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `${noteName} — Street map`, folderId: null, frontmatter }),
+      });
+      const created = await res.json();
+      if (!res.ok) throw new Error(created.error ?? "Could not create the street map note");
+      router.push(`/notes/${created.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-sm text-muted">
+        A walkable, street-level map for this settlement — an organic boundary, districts, streets and clickable building footprints, generated over this
+        note&apos;s own population data.
+      </p>
+      {linkedMaps && linkedMaps.length > 0 ? (
+        <div className="flex flex-col gap-1 text-sm">
+          {linkedMaps.map((m) => (
+            <button key={m.id} type="button" className="text-left text-accent underline w-fit" onClick={() => router.push(`/notes/${m.id}`)}>
+              View street map: {m.name}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <Button className="w-fit" disabled={creating || linkedMaps === null} onClick={() => void generate()}>
+          {creating ? "Creating…" : "Generate street map"}
+        </Button>
+      )}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </div>
   );
 }

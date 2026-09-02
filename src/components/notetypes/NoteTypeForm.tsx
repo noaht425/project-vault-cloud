@@ -28,9 +28,11 @@ export function NoteTypeForm({
   onChange,
   onBodyChange,
 }: {
-  // Only MapForm uses this today (Phase 6 parent/child map drilldown needs
-  // a map note's own title to stamp onto a child note it creates, and to
-  // resolve its own parent by title) — every other form ignores it.
+  // MapForm (Phase 6 parent/child map drilldown — a map note's own title is
+  // stamped onto a child note it creates, and resolves its own parent by
+  // title) and SettlementForm (Phase 7.6 — the "Generate street map" entry
+  // point cityLinks the created map to this settlement by title) use this;
+  // every other form ignores it.
   noteName: string;
   frontmatter: Record<string, unknown>;
   body: string;
@@ -65,7 +67,7 @@ export function NoteTypeForm({
     case "family-tree":
       return <FamilyTreeForm frontmatter={frontmatter} body={body} onChange={onChange} onBodyChange={onBodyChange} />;
     case "settlement":
-      return <SettlementForm frontmatter={frontmatter} onChange={onChange} />;
+      return <SettlementForm noteName={noteName} frontmatter={frontmatter} onChange={onChange} />;
     case "map":
       return <MapForm noteName={noteName} frontmatter={frontmatter} onChange={onChange} />;
     default:

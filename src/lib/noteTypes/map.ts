@@ -79,7 +79,13 @@ export const mapLineSchema = z.object({
   // itself, never touching anything the user drew. Absent/false for every
   // line that predates generation, which is exactly right: nothing old was
   // generated. See docs/plans's procedural map generation plan, Phase 0.
-  generated: z.boolean().catch(false)
+  generated: z.boolean().catch(false),
+  // A display name — only city streets (procedural map generation plan,
+  // Phase 7.3) set this; rivers and roads leave it absent/null, so their
+  // rendering is unchanged. `.nullish()` (not just `.nullable()`) so the
+  // handful of MapLine literals across the codebase don't each need to
+  // spell out `name: null`.
+  name: z.string().nullish().catch(null)
 })
 
 // A landmass has no terrain/speed of its own — it's a pure land/water
@@ -195,6 +201,29 @@ export const territorySchema = z.object({
 // plan) and would otherwise need this schema rewritten every phase. A null
 // generation means exactly what it does today: a map nobody has ever run
 // generation on, including every existing hand-drawn map.
+// The organic outer footprint of a single settlement, for the city-scale
+// street map (procedural map generation plan, Phase 7.1). `points` is a
+// plain single-ring polygon (star-shaped around the settlement centre —
+// see mapGeneration/cityBoundary.ts). `walled` records whether it was
+// generated as a fortified town, which changes how it renders (a wall line
+// vs a soft edge) and, for the later city sub-phases, marks it as a hard
+// stop that district/street/lot generation must stay inside.
+export const cityBoundarySchema = z.object({
+  points: z.array(pointSchema),
+  walled: z.boolean().catch(false)
+})
+
+// Marks this Map note as the street-level layout for a Settlement note
+// (procedural map generation plan, Phase 7.2). Distinct from the world/
+// continent/kingdom parent/child chain in generationConfigSchema — a city
+// map's "parent" is a *settlement*, not another map. Districts, buildings
+// and residents are read from that settlement note at display time rather
+// than copied here (design decision 1); this map note only stores the
+// street network, the cityBoundary, and the seed/params.
+export const cityLinkSchema = z.object({
+  settlementNoteTitle: z.string()
+})
+
 export const generationConfigSchema = z.object({
   seed: z.number(),
   params: z.record(z.string(), z.unknown()).catch({}),
@@ -234,6 +263,14 @@ export const mapFrontmatterSchema = z
     // This map's own generation history, if any — see generationConfigSchema
     // above. Null for every hand-drawn map, including all pre-existing ones.
     generation: generationConfigSchema.nullable().catch(null),
+    // The city-scale street map's outer footprint — see cityBoundarySchema
+    // above. Null on every map that isn't a city map (additive, no
+    // migration); the seed + boundaryIrregularity/walled that produced it
+    // live in generation.params like every other layer's inputs.
+    cityBoundary: cityBoundarySchema.nullable().catch(null),
+    // Which Settlement note this map is the street-level layout for — see
+    // cityLinkSchema. Null on every non-city map.
+    cityLink: cityLinkSchema.nullable().catch(null),
     // Which terrainTypes entry represents "water" — used as the default
     // speed for anything outside every landmass and not otherwise covered
     // by a painted zone/line. Null until the user sets one (see MapSheet's
@@ -304,6 +341,8 @@ export type MapPin = z.infer<typeof mapPinSchema>
 export type ClimateType = z.infer<typeof climateTypeSchema>
 export type ClimateZone = z.infer<typeof climateZoneSchema>
 export type Territory = z.infer<typeof territorySchema>
+export type CityBoundary = z.infer<typeof cityBoundarySchema>
+export type CityLink = z.infer<typeof cityLinkSchema>
 export type GenerationConfig = z.infer<typeof generationConfigSchema>
 
 // Seeded on every new map — generic real-world-ish starting points, not

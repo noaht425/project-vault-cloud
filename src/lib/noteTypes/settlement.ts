@@ -24,6 +24,8 @@ export const specialtyBoostSchema = z.object({
 })
 export type SpecialtyBoost = z.infer<typeof specialtyBoostSchema>
 
+const districtPointSchema = z.object({ x: z.number(), y: z.number() })
+
 export const districtSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -32,7 +34,23 @@ export const districtSchema = z.object({
   // settlement-wide specialty boosts) — a district themed toward temples
   // gets MOST of them, not ALL, so a temple built elsewhere is still
   // possible, just less likely.
-  buildingTypeBoosts: z.array(specialtyBoostSchema).catch([])
+  buildingTypeBoosts: z.array(specialtyBoostSchema).catch([]),
+  // The district's outline on a city-scale street map (procedural map
+  // generation plan, Phase 7.2). A plain single-ring polygon in the city
+  // map's pixel space. Absent/null on every settlement that has no street
+  // map generated yet — additive, no migration; `.nullish()` (not just
+  // `.nullable()`) so the many District literals across the codebase and
+  // its tests don't all have to spell out three nulls. Written by
+  // mapGeneration/districts.ts back onto this same record by id, never a
+  // parallel list (design decision 1).
+  points: z.array(districtPointSchema).nullish().catch(null),
+  // Generation-only "personality" for street/lot generation (decision 6) —
+  // a Noble Quarter reads as large lots + sparse wide streets, a Slum as
+  // small lots + dense narrow streets. Absent until a street map is
+  // generated, at which point districts.ts fills a default keyed off the
+  // district's name and the settlement's size tier (decision 8).
+  targetLotAreaPixels: z.number().nullish().catch(null),
+  streetDensity: z.number().min(0).max(1).nullish().catch(null)
 })
 export type District = z.infer<typeof districtSchema>
 
@@ -318,9 +336,23 @@ export const settlementBuildingSchema = z.object({
   // buildingTypeDefSchema) and preserved on regeneration same as everything
   // else about a promoted building. Empty for building types with no
   // itemPool (civic/residence — see settlementGenerator.ts).
-  inventory: z.array(z.string()).catch([])
+  inventory: z.array(z.string()).catch([]),
+  // This building's rectangle on a city-scale street map (procedural map
+  // generation plan, Phase 7.4). `x`/`y` are the CENTRE, `rotationDegrees`
+  // rotates about it (so a footprint can hug an angled street without being
+  // a real polygon — decision 4). Absent/null on every building that has no
+  // street map placed yet; `.nullish()` so the SettlementBuilding literals
+  // across the codebase don't each need `footprint: null`. Once set, a
+  // building is treated like a promoted one — its footprint survives both a
+  // population regeneration and re-running "Generate buildings" (decision
+  // 5).
+  footprint: z
+    .object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), rotationDegrees: z.number() })
+    .nullish()
+    .catch(null)
 })
 export type SettlementBuilding = z.infer<typeof settlementBuildingSchema>
+export type SettlementBuildingFootprint = NonNullable<SettlementBuilding['footprint']>
 
 // A notable's family — see settlementGenerator.ts's generateFamily for why
 // this is scoped to notables only (staffed-building owners), not every

@@ -156,6 +156,62 @@ export function boundingBoxOf(points: Point[]): { x: number; y: number; width: n
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
+// ── Level-of-detail for the zoomable city-scale canvas (Phase 7.0) ──────
+//
+// A city street map renders far more elements than a world map — hundreds
+// of building footprints, street-name labels, district polygons — and
+// mounting all of them at every zoom level is the main source of lag. So
+// MapCanvas gates what it renders on how far the view is zoomed in. These
+// helpers are the pure part of that decision; the DOM-coupled screen<->
+// viewBox math stays in the component. Shared here so the web and Electron
+// MapCanvas agree on the thresholds and it's unit-testable in isolation.
+
+export type MapLod = 'far' | 'mid' | 'near'
+
+// How far the view is zoomed, relative to "the whole image width fits on
+// screen": 1 = the full image is visible edge to edge, 2 = half of it is,
+// etc. Larger = closer in. Derived from the SVG viewBox width, the only
+// thing pan/zoom actually changes. Guards a zero/negative width (mid
+// layout, degenerate props) back to 1 rather than Infinity/NaN.
+export function viewZoom(imageWidth: number, viewBoxWidth: number): number {
+  if (viewBoxWidth <= 0 || imageWidth <= 0) return 1
+  return imageWidth / viewBoxWidth
+}
+
+// Zoom at/above which mid-detail mounts (district outlines and fills,
+// street centrelines) and, higher still, near-detail (individual building
+// footprints, street-name labels). Below MID, anything city-scale draws as
+// a flat district silhouette only. Tuned so a town-sized boundary fits the
+// viewport whole at "far", districts stay readable while panning at "mid",
+// and the per-building element cost is only paid once you're close enough
+// that a few hundred of them actually fit on screen.
+export const MAP_LOD_MID_ZOOM = 2.5
+export const MAP_LOD_NEAR_ZOOM = 6
+
+export function lodForZoom(zoom: number): MapLod {
+  if (zoom >= MAP_LOD_NEAR_ZOOM) return 'near'
+  if (zoom >= MAP_LOD_MID_ZOOM) return 'mid'
+  return 'far'
+}
+
+// Clamp a desired viewBox width to the allowed zoom range. Zooming OUT is
+// capped at `maxOutFactor`x the image width (headroom to see a map that's
+// been panned partly off-screen); zooming IN is capped at a small absolute
+// floor so a city map can get right down to a single building without the
+// viewBox collapsing toward zero. The floor scales down for small canvases
+// (a cropped city map) but never rises above 50px, so world/continent maps
+// keep the zoom-in depth they had before this existed. Centralised here so
+// the wheel, pinch, button, and keyboard zoom paths can't drift apart.
+export function clampViewBoxWidth(
+  desiredWidth: number,
+  imageWidth: number,
+  opts?: { maxOutFactor?: number; minWidth?: number }
+): number {
+  const maxOutFactor = opts?.maxOutFactor ?? 3
+  const minWidth = opts?.minWidth ?? Math.min(50, imageWidth / 60)
+  return Math.min(imageWidth * maxOutFactor, Math.max(minWidth, desiredWidth))
+}
+
 // A map with no landmasses drawn treats everywhere as land — same as the
 // pre-landmass behavior, so existing maps don't silently pick up a "water"
 // default they never configured. Once at least one landmass exists, a point

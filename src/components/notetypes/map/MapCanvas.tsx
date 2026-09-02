@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { foldDrawnPathAtWraps, segmentDistance, type Point, type WrapConfig } from "@/lib/mapGeometry";
-import { pinDisplayLabel, type ClimateType, type ClimateZone, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType, type Territory } from "@/lib/noteTypes/map";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { clampViewBoxWidth, foldDrawnPathAtWraps, lodForZoom, polygonCentroid, segmentDistance, viewZoom, type MapLod, type Point, type WrapConfig } from "@/lib/mapGeometry";
+import { pinDisplayLabel, type CityBoundary, type ClimateType, type ClimateZone, type LineType, type MapLandmass, type MapLine, type MapPin, type MapZone, type TerrainType, type Territory } from "@/lib/noteTypes/map";
 import { Button } from "@/components/ui/Button";
 
 export type MapCanvasMode = "view" | "calibrate" | "paint-zone" | "draw-line" | "paint-landmass" | "draw-trip" | "place-pin" | "select-region" | "paint-territory";
@@ -13,6 +13,35 @@ interface ViewBox {
   w: number;
   h: number;
 }
+
+// The live pan/zoom state, handed to onViewChange and the cityLayer render
+// prop (Phase 7.0). `zoom` is image-width / viewBox-width (1 = whole image
+// fits, larger = closer in); `lod` is the derived far/mid/near bucket a
+// city-scale layer uses to decide how much to draw (silhouettes when far,
+// building footprints and street labels only when near). See mapGeometry's
+// viewZoom / lodForZoom.
+export interface MapCanvasView {
+  zoom: number;
+  lod: MapLod;
+  viewBox: ViewBox;
+}
+
+// Button/keyboard zoom step — one notch multiplies the viewBox size by this
+// (zoom out) or its inverse (zoom in). The wheel uses its own gentler 0.9/
+// 1.1, and pinch uses the raw finger-distance ratio, so neither is
+// quantised to this.
+const ZOOM_STEP = 1.25;
+
+// Footprint tint by the building type's category (Phase 7.4) — the same
+// "each type gets a colour" idea terrain types use, keyed off the five
+// settlement building categories.
+const BUILDING_CATEGORY_COLORS: Record<string, string> = {
+  residence: "#a98d6b",
+  shop: "#c99b52",
+  civic: "#6f8fb0",
+  religious: "#9a7bb0",
+  tavern: "#c9793c",
+};
 
 // Below this many screen pixels of movement, a touchstart+touchend (or
 // mousedown+mouseup) is treated as a tap/click (place a point / open a pin)
@@ -96,6 +125,36 @@ export interface MapCanvasProps {
   showPins?: boolean;
   showClimateZones?: boolean;
   showTerritories?: boolean;
+  // The city-scale street map's outer footprint (Phase 7.1) — rendered as a
+  // wall line when `walled`, a soft edge otherwise. Null / absent on every
+  // non-city map. Later sub-phases render streets/buildings via cityLayer;
+  // this is just the boundary itself.
+  cityBoundary?: CityBoundary | null;
+  // District polygons for the linked settlement's own districts[] (Phase
+  // 7.2) — rendered the same way territories are (tinted fill + name
+  // label). The parent resolves these from the linked Settlement note;
+  // empty/absent on every non-city map.
+  cityDistricts?: { id: string; name: string; points: Point[]; color?: string }[];
+  // Building footprints for the linked settlement's own buildings[] (Phase
+  // 7.4) — small rotated rectangles tinted by the building type's category.
+  // Only mounted at the closest LOD (a city has hundreds of them). The
+  // parent resolves category from the settlement's buildingTypes[]. Extra
+  // fields the parent may carry for the click panel are ignored here.
+  cityBuildings?: { id: string; footprint: { x: number; y: number; width: number; height: number; rotationDegrees: number }; category: string }[];
+  // Fired when a building footprint is clicked in view mode (Phase 7.5) —
+  // the parent opens a detail panel for that building id.
+  onBuildingClick?: (buildingId: string) => void;
+  // Fired whenever the view pans or zooms, with the derived zoom factor and
+  // level-of-detail bucket (Phase 7.0). Optional — only the city-scale
+  // street-map UI reacts to zoom; every existing caller ignores it.
+  onViewChange?: (view: MapCanvasView) => void;
+  // Extra SVG content rendered above the base layers and below the pins /
+  // draft overlays, given the live view so it can do its own level-of-
+  // detail gating (district silhouettes when `view.lod` is "far", building
+  // footprints and street labels only at "near"). The Phase 7.1+ city
+  // layers plug in here, keeping MapCanvas ignorant of settlement/street
+  // schemas.
+  cityLayer?: (view: MapCanvasView) => ReactNode;
 }
 
 // Adapted from the Electron app's MapCanvas.tsx — same viewBox-based pan/
@@ -145,6 +204,12 @@ export function MapCanvas({
   showPins = true,
   showClimateZones = true,
   showTerritories = true,
+  cityBoundary,
+  cityDistricts = [],
+  cityBuildings = [],
+  onBuildingClick,
+  onViewChange,
+  cityLayer,
 }: MapCanvasProps) {
   const [viewBox, setViewBox] = useState<ViewBox>({ x: 0, y: 0, w: imageWidth, h: imageHeight });
   const [calibrationStart, setCalibrationStart] = useState<Point | null>(null);
@@ -164,9 +229,73 @@ export function MapCanvas({
 
   const handleClickAtRef = useRef<(point: Point) => void>(() => {});
   const onPinClickRef = useRef(onPinClick);
+  const onBuildingClickRef = useRef(onBuildingClick);
   useEffect(() => {
     onPinClickRef.current = onPinClick;
-  }, [onPinClick]);
+    onBuildingClickRef.current = onBuildingClick;
+  }, [onPinClick, onBuildingClick]);
+
+  // Derived pan/zoom state (Phase 7.0). `zoom`/`lod` update on every pan or
+  // zoom tick; `view` is memoised so its identity only changes when a field
+  // actually does, keeping the onViewChange effect and cityLayer from
+  // re-firing on unrelated renders.
+  const zoom = viewZoom(imageWidth, viewBox.w);
+  const lod = lodForZoom(zoom);
+  const view = useMemo<MapCanvasView>(() => ({ zoom, lod, viewBox }), [zoom, lod, viewBox]);
+
+  const onViewChangeRef = useRef(onViewChange);
+  useEffect(() => {
+    onViewChangeRef.current = onViewChange;
+  }, [onViewChange]);
+  useEffect(() => {
+    onViewChangeRef.current?.(view);
+  }, [view]);
+
+  // Zoom the view by `factor` (>1 zooms out, <1 zooms in), keeping the
+  // point under (screenX, screenY) — the viewport centre when omitted —
+  // stationary, the same "anchor a point under the gesture" math the wheel
+  // and pinch paths use. Shared by the wheel handler, the on-canvas +/−/Fit
+  // buttons, and the keyboard shortcuts so they can't diverge.
+  const zoomBy = (factor: number, screenX?: number, screenY?: number): void => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const sx = screenX ?? rect.left + rect.width / 2;
+    const sy = screenY ?? rect.top + rect.height / 2;
+    setViewBox((vb) => {
+      const before = getViewportTransform(rect, vb);
+      const px = vb.x + (sx - rect.left - before.offsetX) / before.scale;
+      const py = vb.y + (sy - rect.top - before.offsetY) / before.scale;
+      const newW = clampViewBoxWidth(vb.w * factor, imageWidth);
+      const newH = vb.h * (newW / vb.w);
+      const after = getViewportTransform(rect, { x: vb.x, y: vb.y, w: newW, h: newH });
+      const newMx = sx - rect.left - after.offsetX;
+      const newMy = sy - rect.top - after.offsetY;
+      return { x: px - newMx / after.scale, y: py - newMy / after.scale, w: newW, h: newH };
+    });
+  };
+  const resetView = (): void => setViewBox({ x: 0, y: 0, w: imageWidth, h: imageHeight });
+
+  const zoomByRef = useRef(zoomBy);
+  const resetViewRef = useRef(resetView);
+  useEffect(() => {
+    zoomByRef.current = zoomBy;
+    resetViewRef.current = resetView;
+  });
+
+  // Keyboard zoom (Phase 7.0) — +/= in, -/_ out, 0 to fit. Ignored while a
+  // form field is focused so typing "-" or "0" into the calibration/latitude
+  // inputs doesn't jump the map.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target;
+      if (el instanceof HTMLElement && (el.isContentEditable || el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+      if (e.key === "+" || e.key === "=") zoomByRef.current(1 / ZOOM_STEP);
+      else if (e.key === "-" || e.key === "_") zoomByRef.current(ZOOM_STEP);
+      else if (e.key === "0") resetViewRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const terrainTypesById = useMemo(() => new Map(terrainTypes.map((t) => [t.id, t])), [terrainTypes]);
   const lineTypesById = useMemo(() => new Map(lineTypes.map((t) => [t.id, t])), [lineTypes]);
@@ -239,6 +368,29 @@ export function MapCanvas({
     [territories]
   );
 
+  // City districts (Phase 7.2) — same visual language as territories (tinted
+  // fill + centred name label), hue cycled by index so adjacent districts
+  // read apart. A district carries its own `color` only if the caller
+  // assigned one; otherwise it's derived here.
+  const cityDistrictElements = useMemo(
+    () =>
+      cityDistricts
+        .filter((d) => d.points.length >= 3)
+        .map((district, i) => {
+          const color = district.color ?? `hsl(${Math.round((360 / Math.max(1, cityDistricts.length)) * i)}, 45%, 45%)`;
+          const centre = polygonCentroid(district.points);
+          return (
+            <g key={district.id}>
+              <polygon points={district.points.map((p) => `${p.x},${p.y}`).join(" ")} fill={color} fillOpacity={0.16} stroke={color} strokeOpacity={0.75} strokeWidth={2} />
+              <text x={centre.x} y={centre.y} textAnchor="middle" fill={color} style={{ fontWeight: 600 }}>
+                {district.name}
+              </text>
+            </g>
+          );
+        }),
+    [cityDistricts]
+  );
+
   const zoneElements = useMemo(
     () =>
       zones.map((zone) => (
@@ -270,6 +422,69 @@ export function MapCanvas({
       )),
     [lines, lineTypesById]
   );
+
+  // Building footprints (Phase 7.4) — a small rectangle per placed
+  // building, rotated about its own centre, tinted by category, and only at
+  // the closest LOD (a city has hundreds). This is the LOD's primary job:
+  // bounding the *rendered* element count, not just the generated one.
+  // Clickable in view mode (Phase 7.5), same opt-out-of-pan-tracking
+  // pattern as a pin (data attribute + stopPropagation); in a drawing mode
+  // a click on a building places a point there like a click anywhere else.
+  const cityBuildingElements = useMemo(() => {
+    if (lod !== "near") return [];
+    return cityBuildings.map(({ id, footprint: f, category }) => (
+      <rect
+        key={`bld-${id}`}
+        data-map-building="true"
+        x={f.x - f.width / 2}
+        y={f.y - f.height / 2}
+        width={f.width}
+        height={f.height}
+        transform={`rotate(${f.rotationDegrees}, ${f.x}, ${f.y})`}
+        fill={BUILDING_CATEGORY_COLORS[category] ?? BUILDING_CATEGORY_COLORS.shop}
+        fillOpacity={0.9}
+        stroke="#3a3128"
+        strokeOpacity={0.55}
+        strokeWidth={0.5}
+        style={{ cursor: mode === "view" ? "pointer" : "crosshair" }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onClick={() => (mode === "view" ? onBuildingClickRef.current?.(id) : handleClickAtRef.current({ x: f.x, y: f.y }))}
+      />
+    ));
+  }, [cityBuildings, lod, mode]);
+
+  // Street name labels (Phase 7.3) — only lines with a `name` (city
+  // streets; rivers/roads leave it null), and only at the closest LOD, so
+  // a zoomed-out city isn't a wall of text. Rotated along the street, with
+  // a white halo so they read over any block fill. Rebuilt when `lod`
+  // crosses the threshold, not on every pan/zoom tick.
+  const streetLabelElements = useMemo(() => {
+    if (lod !== "near") return [];
+    return lines
+      .filter((line) => line.name && line.points.length >= 2)
+      .map((line) => {
+        const midIndex = Math.floor(line.points.length / 2);
+        const mid = line.points[midIndex];
+        const prev = line.points[Math.max(0, midIndex - 1)];
+        let angle = (Math.atan2(mid.y - prev.y, mid.x - prev.x) * 180) / Math.PI;
+        if (angle > 90) angle -= 180;
+        if (angle < -90) angle += 180;
+        return (
+          <text
+            key={`street-label-${line.id}`}
+            x={mid.x}
+            y={mid.y}
+            textAnchor="middle"
+            transform={`rotate(${angle}, ${mid.x}, ${mid.y})`}
+            fill={lineTypesById.get(line.lineTypeId)?.color ?? "#6a5a44"}
+            style={{ fontSize: 10, fontWeight: 600, paintOrder: "stroke", stroke: "#fff", strokeWidth: 3, strokeLinejoin: "round" }}
+          >
+            {line.name}
+          </text>
+        );
+      });
+  }, [lines, lineTypesById, lod]);
 
   const pinElements = useMemo(
     () =>
@@ -423,23 +638,7 @@ export function MapCanvas({
 
   const handleWheel = (e: React.WheelEvent<SVGSVGElement>): void => {
     e.preventDefault();
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    setViewBox((vb) => {
-      const before = getViewportTransform(rect, vb);
-      const px = vb.x + (e.clientX - rect.left - before.offsetX) / before.scale;
-      const py = vb.y + (e.clientY - rect.top - before.offsetY) / before.scale;
-
-      const scaleFactor = e.deltaY < 0 ? 0.9 : 1.1;
-      const newW = Math.min(imageWidth * 3, Math.max(50, vb.w * scaleFactor));
-      const newH = vb.h * (newW / vb.w);
-
-      const after = getViewportTransform(rect, { x: vb.x, y: vb.y, w: newW, h: newH });
-      const newMx = e.clientX - rect.left - after.offsetX;
-      const newMy = e.clientY - rect.top - after.offsetY;
-      return { x: px - newMx / after.scale, y: py - newMy / after.scale, w: newW, h: newH };
-    });
+    zoomBy(e.deltaY < 0 ? 0.9 : 1.1, e.clientX, e.clientY);
   };
 
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>): void => {
@@ -502,7 +701,7 @@ export function MapCanvas({
     const svg = svgRef.current;
     if (!svg) return;
     const handleTouchStart = (e: TouchEvent): void => {
-      if (e.target instanceof Element && e.target.closest("[data-map-pin]")) return;
+      if (e.target instanceof Element && e.target.closest("[data-map-pin], [data-map-building]")) return;
       e.preventDefault();
       if (e.touches.length === 1) {
         const t = e.touches[0];
@@ -546,7 +745,7 @@ export function MapCanvas({
         const py = pinch.origVb.y + (pinch.startMidY - rect.top - before.offsetY) / before.scale;
 
         const scaleFactor = pinch.startDist / dist;
-        const newW = Math.min(imageWidth * 3, Math.max(50, pinch.origVb.w * scaleFactor));
+        const newW = clampViewBoxWidth(pinch.origVb.w * scaleFactor, imageWidth);
         const newH = pinch.origVb.h * (newW / pinch.origVb.w);
 
         const after = getViewportTransform(rect, { x: pinch.origVb.x, y: pinch.origVb.y, w: newW, h: newH });
@@ -639,6 +838,42 @@ export function MapCanvas({
         {showTerritories && <g>{territoryElements}</g>}
         {showZones && <g>{zoneElements}</g>}
         {showLines && <g>{lineElements}</g>}
+
+        {/* The city footprint (Phase 7.1). A walled town draws a heavy
+            wall line (dark base + light coping stroke); an unwalled one a
+            soft dashed edge with a faint fill. Renders under cityLayer so
+            later districts/streets/buildings sit on top of it. */}
+        {cityBoundary && cityBoundary.points.length >= 3 && (
+          cityBoundary.walled ? (
+            <g>
+              <polygon points={cityBoundary.points.map((p) => `${p.x},${p.y}`).join(" ")} fill="#000" fillOpacity={0.03} stroke="#3d2b1f" strokeWidth={6} strokeLinejoin="round" />
+              <polygon points={cityBoundary.points.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#d8c3a5" strokeWidth={2.5} strokeLinejoin="round" />
+            </g>
+          ) : (
+            <polygon
+              points={cityBoundary.points.map((p) => `${p.x},${p.y}`).join(" ")}
+              fill="#c9a24d"
+              fillOpacity={0.05}
+              stroke="#c9a24d"
+              strokeOpacity={0.85}
+              strokeWidth={3}
+              strokeDasharray="10,7"
+              strokeLinejoin="round"
+            />
+          )
+        )}
+
+        {/* City districts (Phase 7.2), inside the boundary. */}
+        {cityDistrictElements.length > 0 && <g>{cityDistrictElements}</g>}
+
+        {/* Building footprints (Phase 7.4) — above districts/streets, below
+            the pins and street labels; near-LOD only. */}
+        {cityBuildingElements.length > 0 && <g>{cityBuildingElements}</g>}
+
+        {/* Phase 7.3+ city-scale layers (streets / building footprints) —
+            mounted above the base map, below the pins and draft overlays,
+            with their own level-of-detail gating driven by `view.lod`. */}
+        {cityLayer && <g>{cityLayer(view)}</g>}
 
         {mode === "paint-zone" && zoneDraft.length > 0 && (
           <g>
@@ -742,8 +977,26 @@ export function MapCanvas({
 
         {tripPath && tripPath.length > 0 && <g>{tripPathElements}</g>}
 
+        {showLines && streetLabelElements.length > 0 && <g>{streetLabelElements}</g>}
+
         {showPins && <g>{pinElements}</g>}
       </svg>
+
+      {/* On-canvas zoom controls (Phase 7.0) — pan is drag, but a discrete
+          zoom-in/out/fit needs real buttons on touch and is handy on
+          desktop too. Keyboard equivalents: +/-, and 0 to fit. */}
+      <div className="absolute top-2 right-2 flex flex-col items-stretch gap-1">
+        <Button aria-label="Zoom in" title="Zoom in (+)" className="w-8 tabular-nums" onClick={() => zoomBy(1 / ZOOM_STEP)}>
+          +
+        </Button>
+        <Button aria-label="Zoom out" title="Zoom out (−)" className="w-8 tabular-nums" onClick={() => zoomBy(ZOOM_STEP)}>
+          −
+        </Button>
+        <Button aria-label="Fit map to view" title="Fit map to view (0)" className="w-8 text-xs" onClick={resetView}>
+          Fit
+        </Button>
+        <span className="text-[10px] text-muted text-center tabular-nums select-none">{zoom.toFixed(1)}×</span>
+      </div>
 
       {draftInfo && draftInfo.count > 0 && (
         <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-2 bg-panel border border-border rounded-lg px-2 py-1.5 shadow-lg">

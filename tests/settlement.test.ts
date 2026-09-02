@@ -113,6 +113,63 @@ describe('settlementFrontmatterSchema', () => {
     expect(fm.buildings).toEqual([])
   })
 
+  it('parses a district with no street-map spatial fields, and round-trips one that has them (Phase 7.2)', () => {
+    const bare = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      districts: [{ id: 'd1', name: 'Market District', buildingTypeBoosts: [] }]
+    })
+    expect(bare.districts[0].points ?? null).toBeNull()
+    expect(bare.districts[0].targetLotAreaPixels ?? null).toBeNull()
+
+    const spatial = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      districts: [
+        { id: 'd1', name: 'Noble Quarter', buildingTypeBoosts: [], points: [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 0 }], targetLotAreaPixels: 3200, streetDensity: 0.3 }
+      ]
+    })
+    expect(spatial.districts[0].points).toEqual([{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 0 }])
+    expect(spatial.districts[0].targetLotAreaPixels).toBe(3200)
+    expect(spatial.districts[0].streetDensity).toBe(0.3)
+
+    // A garbage spatial value degrades to null, never throws.
+    const corrupt = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      districts: [{ id: 'd1', name: 'X', buildingTypeBoosts: [], points: 'nope', streetDensity: 9 }]
+    })
+    expect(corrupt.districts[0].points ?? null).toBeNull()
+    expect(corrupt.districts[0].streetDensity ?? null).toBeNull()
+  })
+
+  it('parses a building with no footprint, and round-trips one that has a footprint (Phase 7.4)', () => {
+    const bare = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      buildings: [{ id: 'b1', name: 'Smithy', buildingTypeId: 'blacksmith', wealthTierId: 'middle', districtId: 'd1' }]
+    })
+    expect(bare.buildings[0].footprint ?? null).toBeNull()
+
+    const placed = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      buildings: [
+        {
+          id: 'b1',
+          name: 'Smithy',
+          buildingTypeId: 'blacksmith',
+          wealthTierId: 'middle',
+          districtId: 'd1',
+          footprint: { x: 120, y: 88, width: 22, height: 16, rotationDegrees: 12.5 }
+        }
+      ]
+    })
+    expect(placed.buildings[0].footprint).toEqual({ x: 120, y: 88, width: 22, height: 16, rotationDegrees: 12.5 })
+
+    // A malformed footprint (missing a field) degrades to null, never throws.
+    const corrupt = settlementFrontmatterSchema.parse({
+      type: 'settlement',
+      buildings: [{ id: 'b1', name: 'S', buildingTypeId: 't', wealthTierId: 'w', districtId: 'd', footprint: { x: 1, y: 2 } }]
+    })
+    expect(corrupt.buildings[0].footprint ?? null).toBeNull()
+  })
+
   it('round-trips a resident with notable content and a promoted note link', () => {
     const fm = settlementFrontmatterSchema.parse({
       type: 'settlement',

@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
-import { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads } from "@/lib/mapGeneration/generateMap";
+import { generateTerrain, generateRivers, generateClimate, generateCivilizations, generateRoads, generateCityBoundary, generateCityDistricts, generateStreets, placeBuildingsInLots } from "@/lib/mapGeneration/generateMap";
+import { resolveGatingSizeId, generateSettlement, generationOptionsFromFrontmatter } from "@/lib/settlementGenerator";
+import { settlementFrontmatterSchema } from "@/lib/noteTypes/settlement";
 import { BIOME_DEFINITIONS, type ClimateAnchor, type WindDirection } from "@/lib/mapGeneration/climate";
 import { defaultLineTypes, defaultMapFrontmatter, defaultTerrainTypes, type LineType, type MapFrontmatter, type MapLandmass, type MapPin, type TerrainType } from "@/lib/noteTypes/map";
 import { generatePlaceName, resolvePlaceNameStyle, PLACE_NAME_STYLES } from "@/lib/placeNames";
@@ -63,6 +65,44 @@ function resolveRoadLineType(lineTypes: LineType[]): { id: string; newType: Line
   return { id: seeded.id, newType: seeded };
 }
 
+// The "Street" line type city streets (Phase 7.3) are stored as. No
+// speedMultiplier effect (1x) — a city map isn't a trip-calculator surface.
+// Resolved by id first, then case-insensitive name, then created.
+function resolveStreetLineType(lineTypes: LineType[]): { id: string; newType: LineType | null } {
+  const byId = lineTypes.find((t) => t.id === "street");
+  if (byId) return { id: byId.id, newType: null };
+  const byName = lineTypes.find((t) => t.name.trim().toLowerCase() === "street");
+  if (byName) return { id: byName.id, newType: null };
+  return { id: "street", newType: { id: "street", name: "Street", color: "#b0a48f", speedMultiplier: 1, climateElevationOverride: null } };
+}
+
+// Every point where a road/path line crosses the city boundary polygon —
+// the entry points a street spine grows inward from.
+function roadEntryPoints(lines: MapFrontmatter["lines"], lineTypes: LineType[], boundary: Point[]): Point[] {
+  const roadNames = new Set(["road", "path"]);
+  const isRoad = (id: string) => roadNames.has(lineTypes.find((t) => t.id === id)?.name.trim().toLowerCase() ?? "");
+  const seg = (p1: Point, p2: Point, p3: Point, p4: Point): Point | null => {
+    const d1x = p2.x - p1.x, d1y = p2.y - p1.y, d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+    const denom = d1x * d2y - d1y * d2x;
+    if (Math.abs(denom) < 1e-9) return null;
+    const dx = p3.x - p1.x, dy = p3.y - p1.y;
+    const t = (dx * d2y - dy * d2x) / denom;
+    const u = (dx * d1y - dy * d1x) / denom;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { x: p1.x + t * d1x, y: p1.y + t * d1y } : null;
+  };
+  const hits: Point[] = [];
+  for (const line of lines) {
+    if (!isRoad(line.lineTypeId)) continue;
+    for (let i = 1; i < line.points.length; i++) {
+      for (let j = 0; j < boundary.length; j++) {
+        const hit = seg(line.points[i - 1], line.points[i], boundary[j], boundary[(j + 1) % boundary.length]);
+        if (hit) hits.push(hit);
+      }
+    }
+  }
+  return hits;
+}
+
 const WIND_DIRECTIONS: WindDirection[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 const KNOWN_BIOME_IDS = new Set<string>(BIOME_DEFINITIONS.map((b) => b.id));
@@ -71,7 +111,7 @@ const KNOWN_BIOME_IDS = new Set<string>(BIOME_DEFINITIONS.map((b) => b.id));
 // MapForm.tsx's own findNoteByExactTitle (not exported from there, so
 // duplicated rather than imported across component files) — used here to
 // resolve a pin's linked note, then that note's own linked climate note.
-async function findNoteByExactTitle(title: string, type?: string): Promise<{ frontmatter: Record<string, unknown> } | null> {
+async function findNoteByExactTitle(title: string, type?: string): Promise<{ id: string; version: number; frontmatter: Record<string, unknown> } | null> {
   const params = new URLSearchParams({ q: title });
   if (type) params.set("type", type);
   const searchRes = await fetch(`/api/notes?${params}`);
@@ -133,6 +173,53 @@ function isInScope(points: Point[], boundaryMask: Point[] | null): boolean {
   return pointInPolygon(polygonCentroid(points), boundaryMask);
 }
 
+// The nearest vertex of any given polyline to `center`, plus the local
+// direction of that polyline there — used to bias the city boundary's
+// shape toward a nearby river or coastline (Phase 7.1, decision 7:
+// elongation "falls out" from geography that's already on the map rather
+// than being its own slider). Kept schema-agnostic (plain point arrays in,
+// a plain angle out) so cityBoundary.ts never imports the note schema.
+function nearestFeatureDirection(center: Point, polylines: Point[][]): { dist: number; angle: number } | null {
+  let best: { dist: number; angle: number } | null = null;
+  for (const line of polylines) {
+    if (line.length < 2) continue;
+    for (let i = 0; i < line.length; i++) {
+      const d = Math.hypot(line[i].x - center.x, line[i].y - center.y);
+      if (best && d >= best.dist) continue;
+      const prev = line[Math.max(0, i - 1)];
+      const next = line[Math.min(line.length - 1, i + 1)];
+      best = { dist: d, angle: Math.atan2(next.y - prev.y, next.x - prev.x) };
+    }
+  }
+  return best;
+}
+
+// Bearings (radians from `center`) of any road/path polyline that starts
+// near the settlement and runs well beyond it — an unwalled town grows a
+// ribbon lobe outward along each (Phase 7.1). Roughly-parallel roads are
+// deduped so two lanes of the same highway don't stack one giant lobe.
+function deriveRoadExitBearings(center: Point, roads: Point[][], radius: number): number[] {
+  const bearings: number[] = [];
+  for (const road of roads) {
+    if (road.length < 2) continue;
+    let nearest = Infinity;
+    let farVertex: Point | null = null;
+    let farDist = -Infinity;
+    for (const p of road) {
+      const d = Math.hypot(p.x - center.x, p.y - center.y);
+      if (d < nearest) nearest = d;
+      if (d > farDist) {
+        farDist = d;
+        farVertex = p;
+      }
+    }
+    if (nearest > radius * 1.6 || farDist <= radius || !farVertex) continue;
+    const bearing = Math.atan2(farVertex.y - center.y, farVertex.x - center.x);
+    if (!bearings.some((b) => Math.abs(b - bearing) < 0.2)) bearings.push(bearing);
+  }
+  return bearings.slice(0, 8);
+}
+
 export function MapGenerationPanel({
   data,
   noteName,
@@ -145,6 +232,7 @@ export function MapGenerationPanel({
   activeBoundaryMask,
   onStartDrawingRegion,
   onClearCustomRegion,
+  onCityDataChanged,
 }: {
   data: MapFrontmatter;
   // This map's own title — see MapForm.tsx's comment on the same prop. Used
@@ -165,6 +253,10 @@ export function MapGenerationPanel({
   activeBoundaryMask: Point[] | null;
   onStartDrawingRegion: () => void;
   onClearCustomRegion: () => void;
+  // Phase 7.2 — called after this panel writes districts (Phase 7.4:
+  // buildings) back to the linked Settlement note, so MapForm refetches
+  // and re-renders the city layers.
+  onCityDataChanged: () => void;
 }) {
   const router = useRouter();
   const savedParams = (data.generation?.params ?? {}) as Record<string, number | string>;
@@ -198,6 +290,20 @@ export function MapGenerationPanel({
 
   const [roadDensity, setRoadDensity] = useState(Number(savedParams.roadDensity ?? 0.3));
   const [generatingRoads, setGeneratingRoads] = useState(false);
+
+  // City boundary (Phase 7.1) — the organic outer footprint for a
+  // city-scale street map. boundaryIrregularity/walled ride in
+  // generation.params like every other layer's inputs.
+  const [boundaryIrregularity, setBoundaryIrregularity] = useState(Number(savedParams.boundaryIrregularity ?? 0.5));
+  const [walled, setWalled] = useState(Boolean(savedParams.walled ?? false));
+  const [generatingCityBoundary, setGeneratingCityBoundary] = useState(false);
+
+  // Phase 7.2 — which Settlement note this map is the street layout for.
+  const [settlementLinkInput, setSettlementLinkInput] = useState(data.cityLink?.settlementNoteTitle ?? "");
+  const [generatingDistricts, setGeneratingDistricts] = useState(false);
+  const [generatingStreets, setGeneratingStreets] = useState(false);
+  const [generatingBuildings, setGeneratingBuildings] = useState(false);
+  const [cityError, setCityError] = useState<string | null>(null);
 
   // Settlement-preset notes, for assigning a civilization "flavor" to a
   // generated territory — see settlementPreset.ts: a civilization here is
@@ -585,6 +691,239 @@ export function MapGenerationPanel({
     }
   };
 
+  // Phase 7.1 — writes cityBoundary. Centre/size come from the active
+  // boundary (draw a rough region, fill it with an organic town outline) or
+  // default to the whole canvas. Elongation and road ribbons are read off
+  // whatever rivers/coastlines/roads the map already has, per decision 7 —
+  // no extra sliders for them.
+  const generateCityBoundaryNow = () => {
+    if (!workingDims) return;
+    setGeneratingCityBoundary(true);
+    try {
+      const center = activeBoundaryMask ? polygonCentroid(activeBoundaryMask) : { x: workingDims.width / 2, y: workingDims.height / 2 };
+      const bbox = activeBoundaryMask ? boundingBoxOf(activeBoundaryMask) : null;
+      const radiusPixels = bbox ? Math.max(bbox.width, bbox.height) / 2 : undefined;
+      const defaultRadius = 0.34 * Math.min(workingDims.width, workingDims.height);
+
+      const lineTypeNameById = new Map(data.lineTypes.map((t) => [t.id, t.name.trim().toLowerCase()]));
+      const rivers = data.lines.filter((l) => lineTypeNameById.get(l.lineTypeId) === "river").map((l) => l.points);
+      const coasts = data.landmasses.map((l) => l.points);
+      const nearRiver = nearestFeatureDirection(center, rivers);
+      const nearCoast = nearestFeatureDirection(center, coasts);
+      const nearest = [nearRiver, nearCoast].filter((f): f is { dist: number; angle: number } => f !== null).sort((a, b) => a.dist - b.dist)[0] ?? null;
+      const range = (radiusPixels ?? defaultRadius) * 2.5;
+      const elongation = nearest && nearest.dist < range ? { angleRadians: nearest.angle, strength: Math.max(0.1, Math.min(0.4, 0.4 * (1 - nearest.dist / range))) } : null;
+
+      const roadPaths = data.lines.filter((l) => ["road", "path"].includes(lineTypeNameById.get(l.lineTypeId) ?? "")).map((l) => l.points);
+      const roadExitBearings = walled ? [] : deriveRoadExitBearings(center, roadPaths, radiusPixels ?? defaultRadius);
+
+      const result = generateCityBoundary({
+        seed,
+        widthPixels: workingDims.width,
+        heightPixels: workingDims.height,
+        center,
+        radiusPixels,
+        boundaryIrregularity,
+        walled,
+        elongation,
+        roadExitBearings,
+      });
+      updateFrontmatter({
+        cityBoundary: { points: result.points, walled: result.walled },
+        generation: mergeGeneration({ boundaryIrregularity, walled }),
+      });
+    } finally {
+      setGeneratingCityBoundary(false);
+    }
+  };
+
+  // Phase 7.2 — reads the linked settlement's own districts[], lays out one
+  // polygon per district inside cityBoundary, and writes the polygons (plus
+  // a name-keyed lot-size / street-density default) back onto that same
+  // settlement note by district id — never a parallel list (decision 1).
+  const generateCityDistrictsNow = async () => {
+    if (!workingDims || !data.cityBoundary || !data.cityLink) return;
+    setGeneratingDistricts(true);
+    setCityError(null);
+    try {
+      const settlementNote = await findNoteByExactTitle(data.cityLink.settlementNoteTitle, "settlement");
+      if (!settlementNote) {
+        setCityError(`No settlement note titled "${data.cityLink.settlementNoteTitle}" found.`);
+        return;
+      }
+      const settlement = settlementFrontmatterSchema.parse(settlementNote.frontmatter);
+      const riverVertices = data.lines
+        .filter((l) => data.lineTypes.find((t) => t.id === l.lineTypeId)?.name.trim().toLowerCase() === "river")
+        .flatMap((l) => l.points);
+      const generated = generateCityDistricts({
+        seed,
+        widthPixels: workingDims.width,
+        heightPixels: workingDims.height,
+        boundaryMask: data.cityBoundary.points,
+        districts: settlement.districts.map((d) => ({ id: d.id, name: d.name })),
+        gatingSizeId: resolveGatingSizeId(settlement.sizeId),
+        waterHintPoints: riverVertices.length > 0 ? riverVertices : undefined,
+      });
+      const byId = new Map(generated.map((g) => [g.id, g]));
+      const mergedDistricts = settlement.districts.map((d) => {
+        const g = byId.get(d.id);
+        return g ? { ...d, points: g.points, targetLotAreaPixels: g.targetLotAreaPixels, streetDensity: g.streetDensity } : d;
+      });
+      const res = await fetch(`/api/notes/${settlementNote.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: settlementNote.version, frontmatter: { ...settlementNote.frontmatter, districts: mergedDistricts } }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setCityError(res.status === 409 ? "The settlement note changed in another tab — reopen it and try again." : (err.error ?? "Could not update the settlement note."));
+        return;
+      }
+      updateFrontmatter({ generation: mergeGeneration({}) });
+      onCityDataChanged();
+    } catch (err) {
+      setCityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingDistricts(false);
+    }
+  };
+
+  // Phase 7.3 — grows a street network inside cityBoundary (spines from
+  // road entry points toward the market/keep, then bounded organic
+  // branching biased by each district's streetDensity) and stores it as
+  // named, generated MapLines on THIS map note. Districts must be generated
+  // first (Phase 7.2) so the streets have per-district personality.
+  const generateCityStreetsNow = async () => {
+    if (!workingDims || !data.cityBoundary || !data.cityLink) return;
+    setGeneratingStreets(true);
+    setCityError(null);
+    try {
+      const settlementNote = await findNoteByExactTitle(data.cityLink.settlementNoteTitle, "settlement");
+      if (!settlementNote) {
+        setCityError(`No settlement note titled "${data.cityLink.settlementNoteTitle}" found.`);
+        return;
+      }
+      const settlement = settlementFrontmatterSchema.parse(settlementNote.frontmatter);
+      const spatialDistricts = settlement.districts
+        .filter((d): d is typeof d & { points: Point[] } => Array.isArray(d.points) && d.points.length >= 3)
+        .map((d) => ({ id: d.id, points: d.points, streetDensity: d.streetDensity ?? 0.5 }));
+      if (spatialDistricts.length === 0) {
+        setCityError("Generate districts first — streets grow inside them.");
+        return;
+      }
+      const marketLike = spatialDistricts.find((d) => {
+        const name = settlement.districts.find((s) => s.id === d.id)?.name.toLowerCase() ?? "";
+        return /market|plaza|forum|government|civic|keep|castle/.test(name);
+      });
+      const { id: streetLineTypeId, newType } = resolveStreetLineType(data.lineTypes);
+      const { streets } = generateStreets({
+        seed,
+        widthPixels: workingDims.width,
+        heightPixels: workingDims.height,
+        boundaryMask: data.cityBoundary.points,
+        districts: spatialDistricts,
+        entryPoints: roadEntryPoints(data.lines, data.lineTypes, data.cityBoundary.points),
+        anchor: marketLike ? polygonCentroid(marketLike.points) : undefined,
+        gatingSizeId: resolveGatingSizeId(settlement.sizeId),
+      });
+      const streetLines = streets
+        .filter((s) => s.points.length >= 2)
+        .map((s) => ({
+          id: crypto.randomUUID(),
+          lineTypeId: streetLineTypeId,
+          points: s.points,
+          widthPixels: s.isSpine ? 4 : 2.5,
+          generated: true,
+          name: s.name,
+        }));
+      const keptLines = data.lines.filter((l) => !l.generated || l.lineTypeId !== streetLineTypeId);
+      updateFrontmatter({
+        lines: [...keptLines, ...streetLines],
+        lineTypes: newType ? [...data.lineTypes, newType] : data.lineTypes,
+        generation: mergeGeneration({}),
+      });
+    } catch (err) {
+      setCityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingStreets(false);
+    }
+  };
+
+  // Phase 7.4 — places every building the linked settlement has into a lot
+  // and writes the `footprint` back onto that same building record. If the
+  // settlement has no buildings yet, generates its population first
+  // (decision 3) using its own frontmatter as the generation inputs.
+  // Non-destructive: a building that already has a footprint keeps it
+  // (decision 5).
+  const generateCityBuildingsNow = async () => {
+    if (!workingDims || !data.cityBoundary || !data.cityLink) return;
+    setGeneratingBuildings(true);
+    setCityError(null);
+    try {
+      const settlementNote = await findNoteByExactTitle(data.cityLink.settlementNoteTitle, "settlement");
+      if (!settlementNote) {
+        setCityError(`No settlement note titled "${data.cityLink.settlementNoteTitle}" found.`);
+        return;
+      }
+      const settlement = settlementFrontmatterSchema.parse(settlementNote.frontmatter);
+      const spatialDistricts = settlement.districts
+        .filter((d): d is typeof d & { points: Point[] } => Array.isArray(d.points) && d.points.length >= 3)
+        .map((d) => ({ id: d.id, points: d.points, targetLotAreaPixels: d.targetLotAreaPixels ?? null }));
+      if (spatialDistricts.length === 0) {
+        setCityError("Generate districts first.");
+        return;
+      }
+      const { id: streetLineTypeId } = resolveStreetLineType(data.lineTypes);
+      const streetPolylines = data.lines.filter((l) => l.lineTypeId === streetLineTypeId && l.points.length >= 2).map((l) => l.points);
+      if (streetPolylines.length === 0) {
+        setCityError("Generate streets first.");
+        return;
+      }
+
+      // Decision 3 — no population yet, so generate it from the settlement's
+      // own frontmatter before placing.
+      const freshlyGenerated = settlement.buildings.length === 0;
+      const generated = freshlyGenerated ? generateSettlement(generationOptionsFromFrontmatter(settlement), { buildings: [], residents: [] }) : null;
+      const buildings = generated?.buildings ?? settlement.buildings;
+
+      const { placements } = placeBuildingsInLots({
+        seed,
+        widthPixels: workingDims.width,
+        heightPixels: workingDims.height,
+        boundaryMask: data.cityBoundary.points,
+        districts: spatialDistricts,
+        streetPolylines,
+        buildings: buildings.map((b) => ({ id: b.id, districtId: b.districtId, footprint: b.footprint ?? null })),
+      });
+      const footprintById = new Map(placements.map((p) => [p.id, p.footprint]));
+      const mergedBuildings = buildings.map((b) => (footprintById.has(b.id) ? { ...b, footprint: footprintById.get(b.id) } : b));
+
+      const res = await fetch(`/api/notes/${settlementNote.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: settlementNote.version,
+          frontmatter: {
+            ...settlementNote.frontmatter,
+            buildings: mergedBuildings,
+            ...(freshlyGenerated && generated ? { residents: generated.residents, factions: generated.factions } : {}),
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setCityError(res.status === 409 ? "The settlement note changed in another tab — reopen it and try again." : (err.error ?? "Could not update the settlement note."));
+        return;
+      }
+      updateFrontmatter({ generation: mergeGeneration({}) });
+      onCityDataChanged();
+    } catch (err) {
+      setCityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingBuildings(false);
+    }
+  };
+
   const renameTerritory = (territoryId: string, name: string) => {
     updateFrontmatter({ territories: data.territories.map((t) => (t.id === territoryId ? { ...t, name } : t)) });
   };
@@ -861,6 +1200,97 @@ export function MapGenerationPanel({
             {generatingRoads ? "Generating…" : "Generate roads"}
           </Button>
           {generatedSettlementPoints.length < 2 && <p className="text-sm text-muted">Needs at least 2 generated settlements — run Civilizations first.</p>}
+        </div>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-3">
+          <h4 className="font-medium text-sm">City (street-scale map)</h4>
+          <p className="text-sm text-muted">
+            Builds a walkable street map for one settlement — its outer footprint, then districts, streets and buildings drawn over the settlement note&apos;s
+            own population data.
+          </p>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span>Linked settlement note — districts, buildings and residents are read from (and written back to) this note.</span>
+            <div className="flex gap-2">
+              <input className="flex-1" value={settlementLinkInput} onChange={(e) => setSettlementLinkInput(e.target.value)} placeholder="Settlement note title" />
+              <Button
+                onClick={() =>
+                  updateFrontmatter({ cityLink: settlementLinkInput.trim() ? { settlementNoteTitle: settlementLinkInput.trim() } : null })
+                }
+              >
+                {data.cityLink ? "Update link" : "Link"}
+              </Button>
+            </div>
+            {data.cityLink && <span className="text-muted">Linked to “{data.cityLink.settlementNoteTitle}”.</span>}
+          </label>
+
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            <span className="text-sm font-medium">Boundary</span>
+            <p className="text-sm text-muted">
+              The organic outer footprint — never a plain circle or square. If a boundary is selected above, it&apos;s centred and sized to that; otherwise it
+              fills the canvas. A nearby river or coastline stretches it along their line, and (when unwalled) roads leaving town grow ribbon extensions.
+            </p>
+            <label className="flex flex-col gap-1 text-sm">
+              <span>Irregularity ({boundaryIrregularity.toFixed(2)}) — low is a clean, planned near-circular town; high is a rough, multi-lobed sprawl.</span>
+              <input type="range" min={0} max={1} step={0.01} value={boundaryIrregularity} onChange={(e) => setBoundaryIrregularity(Number(e.target.value))} />
+            </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={walled} onChange={(e) => setWalled(e.target.checked)} />
+              Walled (a smoother, more convex fortification line — and no ribbon growth outside it)
+            </label>
+            <Button variant="primary" disabled={!workingDims || generatingCityBoundary} onClick={generateCityBoundaryNow}>
+              {generatingCityBoundary ? "Generating…" : data.cityBoundary ? "Regenerate city boundary" : "Generate city boundary"}
+            </Button>
+          </div>
+
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            <span className="text-sm font-medium">Districts</span>
+            <p className="text-sm text-muted">
+              Carves the boundary into one polygon per district the linked settlement already has (Market, Temple, Docks…), each biased toward matching
+              geography where its name gives a hint. Written back onto the settlement note.
+            </p>
+            <Button
+              variant="primary"
+              disabled={!workingDims || !data.cityBoundary || !data.cityLink || generatingDistricts}
+              onClick={() => void generateCityDistrictsNow()}
+            >
+              {generatingDistricts ? "Generating…" : "Generate districts"}
+            </Button>
+            {!data.cityBoundary && <p className="text-sm text-muted">Generate a city boundary first.</p>}
+            {!data.cityLink && <p className="text-sm text-muted">Link a settlement note above first.</p>}
+          </div>
+
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            <span className="text-sm font-medium">Streets</span>
+            <p className="text-sm text-muted">
+              Wide spine streets run from each road entering town toward the market/keep, then organic side streets branch off — denser in a
+              cramped district, sparser in a spacious one. Stored as named lines on this map; names show when zoomed in.
+            </p>
+            <Button
+              variant="primary"
+              disabled={!workingDims || !data.cityBoundary || !data.cityLink || generatingStreets}
+              onClick={() => void generateCityStreetsNow()}
+            >
+              {generatingStreets ? "Generating…" : "Generate streets"}
+            </Button>
+          </div>
+
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            <span className="text-sm font-medium">Buildings</span>
+            <p className="text-sm text-muted">
+              Subdivides each block into lots and drops the settlement&apos;s own buildings into them, one per lot, inside their assigned district. If the
+              settlement has no population yet, it&apos;s generated first. A building that already has a footprint keeps it.
+            </p>
+            <Button
+              variant="primary"
+              disabled={!workingDims || !data.cityBoundary || !data.cityLink || generatingBuildings}
+              onClick={() => void generateCityBuildingsNow()}
+            >
+              {generatingBuildings ? "Generating…" : "Generate buildings"}
+            </Button>
+          </div>
+
+          {cityError && <p className="text-sm text-danger">{cityError}</p>}
         </div>
       </div>
     </details>

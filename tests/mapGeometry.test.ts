@@ -17,6 +17,11 @@ import {
   deriveEquatorY,
   deriveScaleFromLatitudeSpan,
   boundingBoxOf,
+  viewZoom,
+  lodForZoom,
+  clampViewBoxWidth,
+  MAP_LOD_MID_ZOOM,
+  MAP_LOD_NEAR_ZOOM,
   type WrapConfig,
   type LatitudeDistortionConfig
 } from '../src/lib/mapGeometry'
@@ -732,5 +737,62 @@ describe('boundingBoxOf', () => {
 
   it('is all-zero for an empty input', () => {
     expect(boundingBoxOf([])).toEqual({ x: 0, y: 0, width: 0, height: 0 })
+  })
+})
+
+describe('viewZoom / lodForZoom (Phase 7.0 level-of-detail)', () => {
+  it('reports zoom as image-width / viewBox-width', () => {
+    expect(viewZoom(1000, 1000)).toBe(1) // whole image visible
+    expect(viewZoom(1000, 500)).toBe(2) // half visible -> 2x
+    expect(viewZoom(1000, 100)).toBe(10)
+  })
+
+  it('guards a degenerate zero/negative viewBox width back to 1x', () => {
+    expect(viewZoom(1000, 0)).toBe(1)
+    expect(viewZoom(1000, -50)).toBe(1)
+    expect(viewZoom(0, 500)).toBe(1)
+  })
+
+  it('buckets zoom into far / mid / near around the documented thresholds', () => {
+    expect(lodForZoom(1)).toBe('far')
+    expect(lodForZoom(MAP_LOD_MID_ZOOM - 0.01)).toBe('far')
+    expect(lodForZoom(MAP_LOD_MID_ZOOM)).toBe('mid')
+    expect(lodForZoom(MAP_LOD_NEAR_ZOOM - 0.01)).toBe('mid')
+    expect(lodForZoom(MAP_LOD_NEAR_ZOOM)).toBe('near')
+    expect(lodForZoom(50)).toBe('near')
+  })
+
+  it('is monotonic — zooming in never drops to a coarser level', () => {
+    const order = { far: 0, mid: 1, near: 2 }
+    let prev = -1
+    for (let z = 0.5; z <= 20; z += 0.1) {
+      const rank = order[lodForZoom(z)]
+      expect(rank).toBeGreaterThanOrEqual(prev)
+      prev = rank
+    }
+  })
+})
+
+describe('clampViewBoxWidth (Phase 7.0 zoom range)', () => {
+  it('caps zooming out at 3x the image width by default', () => {
+    expect(clampViewBoxWidth(99999, 1000)).toBe(3000)
+  })
+
+  it('caps zooming in at a 50px floor for a large (world) canvas', () => {
+    expect(clampViewBoxWidth(1, 4000)).toBe(50)
+  })
+
+  it('lets a small (cropped city) canvas zoom in past the 50px floor', () => {
+    // 1200px image -> floor is 1200/60 = 20, so a deeper zoom-in is allowed.
+    expect(clampViewBoxWidth(1, 1200)).toBe(20)
+  })
+
+  it('passes an in-range width through untouched', () => {
+    expect(clampViewBoxWidth(800, 2000)).toBe(800)
+  })
+
+  it('honours explicit override options', () => {
+    expect(clampViewBoxWidth(99999, 1000, { maxOutFactor: 1 })).toBe(1000)
+    expect(clampViewBoxWidth(1, 1000, { minWidth: 10 })).toBe(10)
   })
 })

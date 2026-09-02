@@ -6,7 +6,7 @@ import { mapFrontmatterSchema, type LineType, type MapLandmass, type MapLine, ty
 import { crossingTime, deriveEquatorY, deriveScaleFromLatitudeSpan, foldDrawnPathAtWraps, pointInPolygon, type Point } from "@/lib/mapGeometry";
 import { uploadMapImage, getMapImageUrl } from "@/lib/mapImageStorage";
 import { resolveWikiLinkTitle } from "@/lib/wikiLinkResolve";
-import { defaultSettlementFrontmatter } from "@/lib/noteTypes/settlement";
+import { defaultSettlementFrontmatter, settlementFrontmatterSchema } from "@/lib/noteTypes/settlement";
 import { presetFieldsFromPreset, settlementPresetFrontmatterSchema } from "@/lib/noteTypes/settlementPreset";
 import { generateSettlement } from "@/lib/settlementGenerator";
 import { NAME_INSPIRATION_SOURCES } from "@/lib/settlementNames";
@@ -23,6 +23,19 @@ import { useTravelModes } from "./map/useTravelModes";
 interface NoteSummary {
   id: string;
   name: string;
+}
+
+// A placed building plus the display data its click panel needs (Phase
+// 7.5) — resolved from the linked Settlement note. MapCanvas only reads
+// id/footprint/category; the rest is for the detail card.
+interface CityBuildingInfo {
+  id: string;
+  footprint: { x: number; y: number; width: number; height: number; rotationDegrees: number };
+  category: string;
+  name: string;
+  typeName: string;
+  linkedNoteTitle: string | null;
+  residents: { id: string; name: string; race: string; age: number; gender: string; jobTitle: string; notable: boolean; linkedNoteTitle: string | null }[];
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -155,6 +168,75 @@ export function MapForm({
       cancelled = true;
     };
   }, [data.image]);
+
+  // Phase 7.2 — a city map's districts live on the LINKED SETTLEMENT note
+  // (design decision 1), so resolve them here for MapCanvas to render.
+  // Re-runs whenever the link changes; a map with no cityLink clears them.
+  const [cityDistricts, setCityDistricts] = useState<{ id: string; name: string; points: Point[] }[]>([]);
+  const [cityBuildings, setCityBuildings] = useState<CityBuildingInfo[]>([]);
+  // The footprint whose detail panel is open (Phase 7.5). Cleared whenever
+  // the linked settlement is (re)fetched, since ids may have changed.
+  const [selectedCityBuildingId, setSelectedCityBuildingId] = useState<string | null>(null);
+  // Bumped by MapGenerationPanel after it writes districts/buildings back to
+  // the settlement note, so the render below refetches without a full reload.
+  const [cityRefreshKey, setCityRefreshKey] = useState(0);
+  const cityLinkTitle = data.cityLink?.settlementNoteTitle ?? null;
+  useEffect(() => {
+    // No reset branch for the unlinked case — these are only passed to
+    // MapCanvas when data.cityLink is set (see the props below), so a stale
+    // value from a previously-linked settlement is never rendered.
+    if (!cityLinkTitle) return;
+    let cancelled = false;
+    findNoteByExactTitle(cityLinkTitle, "settlement")
+      .then((note) => {
+        if (cancelled || !note) return;
+        const parsed = settlementFrontmatterSchema.parse(note.frontmatter);
+        setCityDistricts(
+          parsed.districts.filter((d): d is typeof d & { points: Point[] } => Array.isArray(d.points) && d.points.length >= 3).map((d) => ({ id: d.id, name: d.name, points: d.points }))
+        );
+        const typeById = new Map(parsed.buildingTypes.map((t) => [t.id, t]));
+        const residentsByBuilding = new Map<string, typeof parsed.residents>();
+        for (const r of parsed.residents) {
+          if (!r.professionBuildingId) continue;
+          const list = residentsByBuilding.get(r.professionBuildingId) ?? [];
+          list.push(r);
+          residentsByBuilding.set(r.professionBuildingId, list);
+        }
+        setCityBuildings(
+          parsed.buildings
+            .filter((b): b is typeof b & { footprint: NonNullable<typeof b.footprint> } => b.footprint != null)
+            .map((b) => ({
+              id: b.id,
+              footprint: b.footprint,
+              category: typeById.get(b.buildingTypeId)?.category ?? "shop",
+              name: b.name,
+              typeName: typeById.get(b.buildingTypeId)?.name ?? b.buildingTypeId,
+              linkedNoteTitle: b.linkedNoteTitle,
+              residents: (residentsByBuilding.get(b.id) ?? []).map((r) => ({
+                id: r.id,
+                name: r.name,
+                race: r.race,
+                age: r.age,
+                gender: r.gender,
+                jobTitle: r.jobTitle,
+                notable: r.notable,
+                linkedNoteTitle: r.linkedNoteTitle,
+              })),
+            }))
+        );
+        setSelectedCityBuildingId(null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCityDistricts([]);
+        setCityBuildings([]);
+        setSelectedCityBuildingId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cityLinkTitle, cityRefreshKey]);
+  const selectedCityBuilding = selectedCityBuildingId ? cityBuildings.find((b) => b.id === selectedCityBuildingId) ?? null : null;
 
   // Same reasoning as the image effect above — pinResults is only ever
   // rendered while pendingPinPoint is set, so no reset branch is needed for
@@ -385,11 +467,12 @@ export function MapForm({
     }
   };
 
-  const openLocationNote = async (title: string) => {
-    const matches = await fetchJson<NoteSummary[]>(`/api/notes?q=${encodeURIComponent(title)}&type=location`).catch(() => []);
+  const openNoteByTitle = async (title: string, type: string) => {
+    const matches = await fetchJson<NoteSummary[]>(`/api/notes?q=${encodeURIComponent(title)}&type=${type}`).catch(() => []);
     const id = resolveWikiLinkTitle(matches, title);
     if (id) router.push(`/notes/${id}`);
   };
+  const openLocationNote = (title: string) => openNoteByTitle(title, "location");
 
   const updateTerrainType = (id: string, patch: Partial<TerrainType>) => updateFrontmatter({ terrainTypes: data.terrainTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)) });
   const updateLineType = (id: string, patch: Partial<LineType>) => updateFrontmatter({ lineTypes: data.lineTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)) });
@@ -627,6 +710,10 @@ export function MapForm({
                 setMode("view");
               }}
               boundaryMask={activeBoundaryMask}
+              cityBoundary={data.cityBoundary}
+              cityDistricts={data.cityLink ? cityDistricts : []}
+              cityBuildings={data.cityLink ? cityBuildings : []}
+              onBuildingClick={setSelectedCityBuildingId}
               highlightedPinIds={highlightedPinIds}
               tripPath={tripOverlayPath}
               equatorY={derivedEquatorY}
@@ -640,6 +727,52 @@ export function MapForm({
               showTerritories={showTerritories}
             />
           </div>
+
+          {selectedCityBuilding && (
+            <div className="border border-border rounded-lg p-3 flex flex-col gap-2 max-w-md">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-medium">{selectedCityBuilding.name}</div>
+                  <div className="text-sm text-muted">{selectedCityBuilding.typeName}</div>
+                </div>
+                <button className="text-muted hover:text-normal" onClick={() => setSelectedCityBuildingId(null)} aria-label="Close">
+                  ✕
+                </button>
+              </div>
+              {selectedCityBuilding.linkedNoteTitle && (
+                <button className="text-left text-accent underline w-fit" onClick={() => void openNoteByTitle(selectedCityBuilding.linkedNoteTitle!, "location")}>
+                  Open {selectedCityBuilding.linkedNoteTitle}
+                </button>
+              )}
+              {selectedCityBuilding.residents.length > 0 ? (
+                <div className="flex flex-col gap-1">
+                  <div className="text-sm text-muted">
+                    {selectedCityBuilding.residents.length} resident{selectedCityBuilding.residents.length === 1 ? "" : "s"} work here
+                  </div>
+                  <ul className="flex flex-col gap-0.5 text-sm">
+                    {selectedCityBuilding.residents.map((r) => (
+                      <li key={r.id} className="flex flex-wrap items-baseline gap-x-1.5">
+                        {r.linkedNoteTitle ? (
+                          <button className="text-accent underline" onClick={() => void openNoteByTitle(r.linkedNoteTitle!, "npc")}>
+                            {r.name}
+                          </button>
+                        ) : (
+                          <span>{r.name}</span>
+                        )}
+                        <span className="text-muted">
+                          {r.jobTitle ? `${r.jobTitle}, ` : ""}
+                          {r.race}
+                          {r.age ? `, ${r.age}` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="text-sm text-muted">No residents work here.</div>
+              )}
+            </div>
+          )}
 
           {pendingPixelDistance !== null && (
             <div className="flex flex-wrap items-end gap-2">
@@ -788,6 +921,7 @@ export function MapForm({
               setCustomBoundaryMask(null);
               if (boundarySource === "custom") setBoundarySource("whole-map");
             }}
+            onCityDataChanged={() => setCityRefreshKey((k) => k + 1)}
           />
         </>
       )}
