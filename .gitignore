@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# fight simulator — private homebrew stat blocks (not campaign IP for the public repo)
+src/lib/sim/fixtures/local/
+src/lib/sim/CALIBRATION.local.md

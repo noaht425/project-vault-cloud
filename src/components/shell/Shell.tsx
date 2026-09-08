@@ -45,6 +45,11 @@ export function Shell({ userEmail, children }: { userEmail: string | null; child
                 Initiative
               </Button>
             </Link>
+            <Link href="/simulator">
+              <Button variant="ghost" aria-label="Fight simulator">
+                Sim
+              </Button>
+            </Link>
             <Link href="/contradictions">
               <Button variant="ghost" aria-label="Contradiction check">
                 Checks
