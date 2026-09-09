@@ -18,6 +18,7 @@ import {
   standardParty,
   type PartyMemberSpec,
 } from "./engine/scenario";
+import { runDay, dayMonteCarlo, type DayInput, type DayMonteCarlo, type DayResult, type RestKind } from "./engine/day";
 import {
   parseCombatant,
   ABILITIES,
@@ -209,6 +210,29 @@ export interface SimSetup {
   battleMap?: BattleMapDef;
   /** unit ids the player drives in Battle mode; empty / undefined = full auto */
   battleControl?: string[];
+  /** adventuring-day mode: a sequence of encounters with rests between */
+  day?: { encounters: EnemyEntry[][]; rests: RestKind[] };
+}
+
+export type { DayResult, DayMonteCarlo, RestKind };
+
+export interface DayRun {
+  seed: number;
+  mc: DayMonteCarlo;
+  sample: DayResult;
+}
+
+/** Monte-Carlo a full adventuring day from the setup's `day` sequence. */
+export function runDayFromSetup(setup: SimSetup, seed = setup.seed): DayRun {
+  const extraById = customById(setup.customMonsters);
+  const encounters = (setup.day?.encounters ?? []).map((enc) => enemyList(enc));
+  const rests = setup.day?.rests ?? [];
+  const input: DayInput = { party: setup.party, encounters, rests, extraById, seed };
+  return {
+    seed,
+    mc: dayMonteCarlo(input, Math.min(400, Math.max(80, setup.trials))),
+    sample: runDay(input),
+  };
 }
 
 export interface SimResult {

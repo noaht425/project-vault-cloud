@@ -54,6 +54,9 @@ export interface RunOptions {
   keepLog?: boolean;
   /** an explicit party (built from templates); when omitted, the generic Phase-1 party is used */
   party?: Combatant[];
+  /** pre-initialised party unit states to reuse (adventuring-day mode carries HP /
+   *  resources / death-save state across encounters). Overrides `party`. */
+  partyStates?: CombatantState[];
   /** what-if knobs: scale monster HP, shift to-hit / DC / damage on either side */
   tuning?: CombatTuning;
   /** extra stat blocks a `summon` node can name — custom-loaded monster packs */
@@ -62,13 +65,34 @@ export interface RunOptions {
 
 export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatState {
   const level = opts.level ?? 20;
-  const size = opts.party ? opts.party.length : opts.partySize ?? 4;
+  const size = opts.partyStates ? opts.partyStates.length : opts.party ? opts.party.length : opts.partySize ?? 4;
   const rng = makeRng(opts.seed ?? 1, level, size, monsters.length);
   const pcs = opts.party ?? makeGenericParty(level, size);
 
   const units = new Map<string, CombatantState>();
   for (const m of monsters) units.set(m.id, initCombatant(m, "monster"));
-  for (const pc of pcs) units.set(pc.id, initCombatant(pc, "party"));
+  if (opts.partyStates) {
+    // adventuring-day: reuse the carried-forward states, but wipe per-encounter
+    // scratch (conditions, effects, turn economy, per-fight aggregates)
+    for (const p of opts.partyStates) {
+      p.conditions.clear();
+      p.effects = [];
+      p.tempHp = 0;
+      p.concentratingOn = undefined;
+      p.concentrationEffects = undefined;
+      p.onceFired = new Set();
+      p.markedTargetId = undefined;
+      p.assassinateUntilRound = undefined;
+      p.meleeHitSinceMyTurn = false;
+      p.damageDealt = 0;
+      p.damageTaken = 0;
+      p.downedRound = undefined;
+      startTurnEconomy(p);
+      units.set(p.id, p);
+    }
+  } else {
+    for (const pc of pcs) units.set(pc.id, initCombatant(pc, "party"));
+  }
 
   // what-if: scale monster HP (minions are added later, so this is just the originals)
   const hpMult = opts.tuning?.monsterHpMult;

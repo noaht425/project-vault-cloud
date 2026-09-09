@@ -34,9 +34,9 @@ import {
   type SweepDim,
   type SweepOut,
 } from "@/lib/sim/ui";
-import { runSimAsync, runSweepAsync, runBattleAsync } from "@/lib/sim/runner";
+import { runSimAsync, runSweepAsync, runBattleAsync, runDayAsync } from "@/lib/sim/runner";
 import { aoePreview, autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
-import type { AwaitAction, AwaitingInput, BattleDecision, BattleMapDef, BattleRun, RosterEntry, UnitSnap } from "@/lib/sim/ui";
+import type { AwaitAction, AwaitingInput, BattleDecision, BattleMapDef, BattleRun, DayRun, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -59,7 +59,7 @@ function loadSetup(): SimSetup {
   }
 }
 
-type Mode = "single" | "sweep" | "battle";
+type Mode = "single" | "sweep" | "battle" | "day";
 
 export default function SimulatorPage() {
   const [setup, setSetup] = useState<SimSetup>(() =>
@@ -68,6 +68,7 @@ export default function SimulatorPage() {
   const [mode, setMode] = useState<Mode>("single");
   const [result, setResult] = useState<SimResult | null>(null);
   const [sweep, setSweep] = useState<SweepOut | null>(null);
+  const [day, setDay] = useState<DayRun | null>(null);
   const [battleStarted, setBattleStarted] = useState(false);
   const [sweepDim, setSweepDim] = useState<SweepDim>("level");
   const [running, setRunning] = useState(false);
@@ -94,9 +95,15 @@ export default function SimulatorPage() {
       if (mode === "single") {
         setResult(await runSimAsync(setup));
         setSweep(null);
+        setDay(null);
       } else if (mode === "sweep") {
         setSweep(await runSweepAsync(setup, sweepDim));
         setResult(null);
+        setDay(null);
+      } else if (mode === "day") {
+        setDay(await runDayAsync(setup));
+        setResult(null);
+        setSweep(null);
       } else {
         // Battle mode is interactive — <BattleMap> owns the run loop.
         // A "Run battle" just (re)mounts it fresh.
@@ -109,12 +116,16 @@ export default function SimulatorPage() {
       setError(e instanceof Error ? e.message : String(e));
       setResult(null);
       setSweep(null);
+      setDay(null);
     } finally {
       setRunning(false);
     }
   }, [setup, running, mode, sweepDim]);
 
-  const busy = running || setup.enemies.length === 0 || setup.party.length === 0;
+  const busy =
+    running ||
+    setup.party.length === 0 ||
+    (mode === "day" ? (setup.day?.encounters.length ?? 0) === 0 : setup.enemies.length === 0);
 
   return (
     <div className="p-4 sm:p-6 max-w-3xl w-full flex flex-col gap-5">
@@ -125,25 +136,33 @@ export default function SimulatorPage() {
         </span>
       </header>
 
-      <EnemyEditor
-        options={options}
-        enemies={setup.enemies}
-        onChange={(enemies) => persist({ ...setup, enemies })}
-        customMonsters={setup.customMonsters}
-        onCustomChange={(customMonsters) => persist({ ...setup, customMonsters })}
-      />
+      {mode === "day" ? (
+        <DayEditor
+          options={options}
+          day={setup.day}
+          onChange={(d) => persist({ ...setup, day: d })}
+        />
+      ) : (
+        <EnemyEditor
+          options={options}
+          enemies={setup.enemies}
+          onChange={(enemies) => persist({ ...setup, enemies })}
+          customMonsters={setup.customMonsters}
+          onCustomChange={(customMonsters) => persist({ ...setup, customMonsters })}
+        />
+      )}
 
       <PartyEditor party={setup.party} onChange={(party) => persist({ ...setup, party })} />
 
       <section className="flex flex-col gap-3">
         <div className="inline-flex self-start rounded border border-border overflow-hidden text-sm">
-          {(["single", "sweep", "battle"] as Mode[]).map((m) => (
+          {(["single", "sweep", "battle", "day"] as Mode[]).map((m) => (
             <button
               key={m}
               className={`px-3 py-1.5 ${mode === m ? "bg-active text-normal" : "bg-panel text-muted hover:bg-hover"}`}
               onClick={() => setMode(m)}
             >
-              {m === "single" ? "Single fight" : m === "sweep" ? "What-if sweep" : "Battle map"}
+              {m === "single" ? "Single fight" : m === "sweep" ? "What-if sweep" : m === "battle" ? "Battle map" : "Adventuring day"}
             </button>
           ))}
         </div>
@@ -187,7 +206,15 @@ export default function SimulatorPage() {
             />
           </label>
           <Button variant="primary" onClick={() => void run()} disabled={busy}>
-            {running ? "Running…" : mode === "single" ? "Run simulation" : mode === "sweep" ? "Run sweep" : "Run battle"}
+            {running
+              ? "Running…"
+              : mode === "single"
+                ? "Run simulation"
+                : mode === "sweep"
+                  ? "Run sweep"
+                  : mode === "battle"
+                    ? "Run battle"
+                    : "Run the day"}
           </Button>
         </div>
         {mode === "sweep" && (
@@ -220,6 +247,13 @@ export default function SimulatorPage() {
         <Results result={result} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
       )}
       {sweep && !running && mode === "sweep" && <SweepResults out={sweep} />}
+      {day && !running && mode === "day" && <DayResults day={day} />}
+      {mode === "day" && !day && !running && (
+        <p className="text-xs text-muted">
+          Runs your encounter list in sequence with HP, spell slots and 1/day powers carried forward and a short or long
+          rest between each. Single-fight win rates over-value going nova — this shows where the party actually runs dry.
+        </p>
+      )}
       {mode === "battle" && battleStarted && (
         <BattleMap key={`${battleNonce}:${(setup.battleControl ?? []).join(",")}`} setup={setup} />
       )}
@@ -2261,6 +2295,158 @@ function DamageList({ title, rows }: { title: string; rows: { name: string; avgD
 }
 
 // --------------------------------------------------------------- sweep table
+
+// ------------------------------------------------------------- adventuring day
+
+const REST_LABEL: Record<RestKind, string> = { none: "no rest", short: "short rest", long: "long rest" };
+
+function DayEditor({
+  options,
+  day,
+  onChange,
+}: {
+  options: MonsterOption[];
+  day: SimSetup["day"];
+  onChange: (d: SimSetup["day"]) => void;
+}) {
+  const encounters = day?.encounters ?? [];
+  const rests = day?.rests ?? [];
+  const [pick, setPick] = useState<Record<number, string>>({});
+
+  const set = (encs: SimSetup["day"]) => onChange(encs);
+  const addEncounter = () =>
+    set({ encounters: [...encounters, []], rests: [...rests, encounters.length ? "short" : "none"] });
+  const removeEncounter = (i: number) =>
+    set({ encounters: encounters.filter((_, x) => x !== i), rests: rests.filter((_, x) => x !== i) });
+  const addMonster = (i: number, id: string) => {
+    if (!id) return;
+    const next = encounters.map((enc, x) => {
+      if (x !== i) return enc;
+      const existing = enc.find((e) => e.id === id);
+      return existing ? enc.map((e) => (e.id === id ? { ...e, count: e.count + 1 } : e)) : [...enc, { id, count: 1 }];
+    });
+    set({ encounters: next, rests });
+  };
+  const bumpMonster = (i: number, id: string, d: number) => {
+    const next = encounters.map((enc, x) =>
+      x !== i ? enc : enc.flatMap((e) => (e.id !== id ? [e] : e.count + d <= 0 ? [] : [{ ...e, count: e.count + d }])),
+    );
+    set({ encounters: next, rests });
+  };
+  const setRest = (i: number, r: RestKind) => set({ encounters, rests: rests.map((x, k) => (k === i ? r : x)) });
+
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-3 flex-wrap">
+        <h2 className="text-sm font-medium text-muted uppercase tracking-wide">The day</h2>
+        <button className="text-xs text-accent hover:underline" onClick={addEncounter}>+ encounter</button>
+      </div>
+      {encounters.length === 0 && (
+        <p className="text-xs text-muted">Add a few encounters to run in sequence.</p>
+      )}
+      <ol className="flex flex-col gap-2">
+        {encounters.map((enc, i) => (
+          <li key={i} className="bg-panel border border-border rounded p-3 flex flex-col gap-2 text-sm">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted w-14">Fight {i + 1}</span>
+              <select
+                className="min-w-40 text-xs"
+                value={pick[i] ?? ""}
+                onChange={(e) => {
+                  addMonster(i, e.target.value);
+                  setPick((p) => ({ ...p, [i]: "" }));
+                }}
+              >
+                <option value="">add a monster…</option>
+                {options.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name} — CR {o.cr}</option>
+                ))}
+              </select>
+              <button className="text-xs text-muted hover:text-danger ml-auto" onClick={() => removeEncounter(i)}>remove</button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {enc.length === 0 && <span className="text-xs text-muted">empty</span>}
+              {enc.map((e) => (
+                <span key={e.id} className="text-xs px-1.5 py-0.5 rounded bg-hover flex items-center gap-1">
+                  {options.find((o) => o.id === e.id)?.name ?? e.id}
+                  <button className="text-muted hover:text-normal" onClick={() => bumpMonster(i, e.id, -1)}>−</button>
+                  <span className="tabular-nums">{e.count}</span>
+                  <button className="text-muted hover:text-normal" onClick={() => bumpMonster(i, e.id, 1)}>+</button>
+                </span>
+              ))}
+            </div>
+            {i < encounters.length - 1 && (
+              <div className="flex items-center gap-1.5 text-xs text-muted">
+                then
+                <select className="text-xs" value={rests[i] ?? "short"} onChange={(e) => setRest(i, e.target.value as RestKind)}>
+                  {(["none", "short", "long"] as RestKind[]).map((r) => (
+                    <option key={r} value={r}>{REST_LABEL[r]}</option>
+                  ))}
+                </select>
+                before the next fight
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function DayResults({ day }: { day: DayRun }) {
+  const { mc } = day;
+  const win = mc.dayWinRate;
+  const tone = win >= 0.75 ? "text-positive" : win >= 0.4 ? "text-warning" : "text-danger";
+  return (
+    <section className="flex flex-col gap-4">
+      <div className="bg-panel border border-border rounded p-4 flex flex-col gap-3">
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <span className={`font-serif text-base ${tone}`}>
+            Party survives the full day {pct(win)} of the time
+          </span>
+          <span className="text-xs text-muted">{mc.trials} days</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <Stat label="Encounters cleared" value={mc.encountersClearedAvg.toFixed(1)} sub={`of ${mc.perEncounter.length}`} big />
+          <Stat label="Resources left" value={pct(mc.resourcesLeftPctAvg)} sub="slots & 1/day" big />
+          <Stat
+            label="The wall"
+            value={mc.wallEncounter ? `Fight ${mc.wallEncounter}` : "—"}
+            sub={mc.wallEncounter ? "first to slip" : "clears the day"}
+            big
+            tone={mc.wallEncounter ? "text-warning" : undefined}
+          />
+          <Stat label="Day win" value={pct(win)} big tone={win < 0.4 ? "text-danger" : undefined} />
+        </div>
+      </div>
+
+      <div className="bg-panel border border-border rounded p-4">
+        <table className="text-sm w-full">
+          <thead className="text-xs text-muted">
+            <tr className="text-left">
+              <th className="py-1">Fight</th>
+              <th className="py-1 text-right">Win</th>
+              <th className="py-1 text-right">HP after</th>
+              <th className="py-1 text-right">Rounds</th>
+              <th className="py-1 text-right">Reached</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mc.perEncounter.map((e, i) => (
+              <tr key={i} className="border-t border-border">
+                <td className="py-1.5">{i + 1}</td>
+                <td className="py-1.5 text-right tabular-nums">{pct(e.winRate)}</td>
+                <td className="py-1.5 text-right tabular-nums">{pct(e.hpPctAfterAvg)}</td>
+                <td className="py-1.5 text-right tabular-nums">{e.roundsAvg.toFixed(1)}</td>
+                <td className="py-1.5 text-right tabular-nums text-muted">{pct(e.foughtRate)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 function SweepResults({ out }: { out: SweepOut }) {
   const label = SWEEP_DIMS.find((d) => d.id === out.dimension)!.label;
