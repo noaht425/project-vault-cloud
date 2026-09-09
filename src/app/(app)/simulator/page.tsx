@@ -220,7 +220,9 @@ export default function SimulatorPage() {
         <Results result={result} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
       )}
       {sweep && !running && mode === "sweep" && <SweepResults out={sweep} />}
-      {mode === "battle" && battleStarted && <BattleMap key={battleNonce} setup={setup} />}
+      {mode === "battle" && battleStarted && (
+        <BattleMap key={`${battleNonce}:${(setup.battleControl ?? []).join(",")}`} setup={setup} />
+      )}
       {mode === "battle" && !battleStarted && (
         <p className="text-xs text-muted">
           A single fight on a 5-ft grid — watch the AI move, take cover, and trade blows turn by turn, or check a party
@@ -239,6 +241,27 @@ const TERRAIN_CLASS: Record<string, string> = {
   "!": "text-danger/60",
   o: "text-amber-600/60 dark:text-amber-400/50",
 };
+
+const TERRAIN_LEGEND: { g: string; label: string }[] = [
+  { g: "·", label: "floor" },
+  { g: "#", label: "wall — blocks movement & sight" },
+  { g: "~", label: "difficult — costs double to enter" },
+  { g: "o", label: "cover — blocks movement, grants +AC" },
+  { g: "!", label: "hazard — damages anything standing in it" },
+];
+
+function TerrainLegend() {
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+      {TERRAIN_LEGEND.map((t) => (
+        <span key={t.g} className="flex items-center gap-1">
+          <span className={`font-mono w-3 text-center ${TERRAIN_CLASS[t.g === "·" ? "." : t.g] ?? "text-muted/30"}`}>{t.g}</span>
+          {t.label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function ControlPicker({ setup, onChange }: { setup: SimSetup; onChange: (ids: string[]) => void }) {
   const party = useMemo(() => {
@@ -373,6 +396,7 @@ function Replay({
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(450);
+  const [hoverOrigin, setHoverOrigin] = useState<{ x: number; y: number } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const last = frames.length - 1;
   const atEnd = idx >= last;
@@ -415,14 +439,31 @@ function Replay({
   // ---- control-mode board interactions ----
   const reachSet = useMemo(() => new Set(awaiting?.reachable ?? []), [awaiting]);
   const selAction: AwaitAction | undefined = awaiting?.actions.find((a) => a.id === wiz.action);
+  const aimOrigin = wiz.origin ?? hoverOrigin;
   const aoePrev = useMemo(() => {
-    if (!awaiting || !selAction?.aoe || !wiz.origin) return new Set<string>();
+    if (!awaiting || !selAction?.aoe || !aimOrigin) return new Set<string>();
     const from = wiz.move ?? awaiting.pos;
-    return new Set(aoePreview(selAction.aoe.shape, from, wiz.origin, selAction.aoe.sizeFt, dims));
-  }, [awaiting, selAction, wiz.origin, wiz.move, dims]);
+    return new Set(aoePreview(selAction.aoe.shape, from, aimOrigin, selAction.aoe.sizeFt, dims));
+  }, [awaiting, selAction, aimOrigin, wiz.move, dims]);
 
   const targetsEnemy = !!selAction && !selAction.friendly && !selAction.aoe;
   const needsOrigin = !!selAction?.aoe;
+  // rough 5-10-5 feet from a 1x1 square to a footprint box (just for the "out of reach" hint)
+  const roughFt = (mx: number, my: number, b: { x0: number; y0: number; x1: number; y1: number }) => {
+    const gx = Math.max(0, mx - b.x1, b.x0 - mx);
+    const gy = Math.max(0, my - b.y1, b.y0 - my);
+    const diag = Math.min(gx, gy);
+    return (Math.max(gx, gy) + diag) * 5 + Math.floor(diag / 2) * 5;
+  };
+  const meleeGap =
+    awaiting && selAction?.needsMelee && wiz.target
+      ? (() => {
+          const from = wiz.move ?? awaiting.pos;
+          const tb = awaiting.units.find((u) => u.id === wiz.target)?.box;
+          return tb ? roughFt(from.x, from.y, tb) : 0;
+        })()
+      : 0;
+  const outOfReach = !!awaiting && !!wiz.target && !!selAction?.needsMelee && meleeGap > awaiting.reachFt + 0.001;
   const step: "move" | "target" | "origin" | "ready" = !awaiting
     ? "ready"
     : targetsEnemy && !wiz.target
@@ -480,9 +521,9 @@ function Replay({
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-muted">Action:</span>
-            {awaiting.actions.length === 0 && <span className="text-xs text-muted">— none available —</span>}
+          <div className="flex items-start gap-1.5 flex-wrap max-h-28 overflow-y-auto">
+            <span className="text-xs text-muted pt-1">Action:</span>
+            {awaiting.actions.length === 0 && <span className="text-xs text-muted pt-1">— none available —</span>}
             {awaiting.actions.map((a) => (
               <button
                 key={a.id}
@@ -502,10 +543,15 @@ function Replay({
             )}
           </div>
           {targetsEnemy && (
-            <div className="text-xs text-muted">Target: {wiz.target ? roster.find((u) => u.id === wiz.target)?.name ?? wiz.target : "—"}</div>
+            <div className="text-xs text-muted">
+              Target: {wiz.target ? roster.find((u) => u.id === wiz.target)?.name ?? wiz.target : "—"}
+              {outOfReach && (
+                <span className="text-warning ml-2">⚠ ~{meleeGap} ft away — move closer or the strike whiffs</span>
+              )}
+            </div>
           )}
           {needsOrigin && (
-            <div className="text-xs text-muted">Aim point: {wiz.origin ? `(${wiz.origin.x}, ${wiz.origin.y})` : "—"}</div>
+            <div className="text-xs text-muted">Aim point: {wiz.origin ? `(${wiz.origin.x}, ${wiz.origin.y})` : "hover the map"}</div>
           )}
           <div className="flex items-center gap-2 flex-wrap pt-1">
             <Button
@@ -593,12 +639,12 @@ function Replay({
               // highlights
               let bg = "";
               if (awaiting) {
-                if (wiz.move && wiz.move.x === x && wiz.move.y === y) bg = "bg-accent/40 rounded-sm";
-                else if (wiz.origin && wiz.origin.x === x && wiz.origin.y === y) bg = "bg-warning/50 rounded-sm";
-                else if (aoePrev.has(key)) bg = "bg-warning/25";
-                else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/15";
-                else if (step === "target" && u?.side === "monster") bg = "bg-danger/25 rounded-sm";
-                else if (wiz.target && u?.id === wiz.target) bg = "bg-danger/40 rounded-sm";
+                if (wiz.move && wiz.move.x === x && wiz.move.y === y) bg = "bg-accent/50 rounded-sm ring-1 ring-accent";
+                else if (aimOrigin && aimOrigin.x === x && aimOrigin.y === y) bg = "bg-warning/50 rounded-sm";
+                else if (aoePrev.has(key)) bg = "bg-warning/30";
+                else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/25";
+                else if (step === "target" && u?.side === "monster") bg = "bg-danger/30 rounded-sm";
+                else if (wiz.target && u?.id === wiz.target) bg = "bg-danger/50 rounded-sm ring-1 ring-danger";
               }
               if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
               else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
@@ -608,12 +654,17 @@ function Replay({
                   className={`text-center ${cls} ${bg}`}
                   style={{ height: "1.15em" }}
                   onClick={awaiting ? () => clickCell(x, y, u) : undefined}
+                  onMouseEnter={awaiting && step === "origin" ? () => setHoverOrigin({ x, y }) : undefined}
+                  onMouseLeave={awaiting && step === "origin" ? () => setHoverOrigin(null) : undefined}
                   title={u ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}` : undefined}
                 >
                   {ch}
                 </span>
               );
             })}
+          </div>
+          <div className="mt-1.5">
+            <TerrainLegend />
           </div>
         </div>
 
@@ -1018,6 +1069,8 @@ function MapEditor({
           clear terrain
         </button>
       </div>
+
+      <TerrainLegend />
 
       {/* board + tray */}
       <div className="flex gap-4 flex-wrap items-start">
