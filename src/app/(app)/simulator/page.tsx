@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import {
   ABILITIES,
@@ -34,7 +34,8 @@ import {
   type SweepDim,
   type SweepOut,
 } from "@/lib/sim/ui";
-import { runSimAsync, runSweepAsync } from "@/lib/sim/runner";
+import { runSimAsync, runSweepAsync, runBattleAsync } from "@/lib/sim/runner";
+import type { BattleRun, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -57,7 +58,7 @@ function loadSetup(): SimSetup {
   }
 }
 
-type Mode = "single" | "sweep";
+type Mode = "single" | "sweep" | "battle";
 
 export default function SimulatorPage() {
   const [setup, setSetup] = useState<SimSetup>(() =>
@@ -66,8 +67,10 @@ export default function SimulatorPage() {
   const [mode, setMode] = useState<Mode>("single");
   const [result, setResult] = useState<SimResult | null>(null);
   const [sweep, setSweep] = useState<SweepOut | null>(null);
+  const [battle, setBattle] = useState<BattleRun | null>(null);
   const [sweepDim, setSweepDim] = useState<SweepDim>("level");
   const [running, setRunning] = useState(false);
+  const [battleNonce, setBattleNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const options = useMemo(() => monsterOptions(setup.customMonsters), [setup.customMonsters]);
@@ -89,14 +92,22 @@ export default function SimulatorPage() {
       if (mode === "single") {
         setResult(await runSimAsync(setup));
         setSweep(null);
-      } else {
+        setBattle(null);
+      } else if (mode === "sweep") {
         setSweep(await runSweepAsync(setup, sweepDim));
         setResult(null);
+        setBattle(null);
+      } else {
+        setBattle(await runBattleAsync(setup, setup.seed));
+        setBattleNonce((n) => n + 1);
+        setResult(null);
+        setSweep(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setResult(null);
       setSweep(null);
+      setBattle(null);
     } finally {
       setRunning(false);
     }
@@ -125,13 +136,13 @@ export default function SimulatorPage() {
 
       <section className="flex flex-col gap-3">
         <div className="inline-flex self-start rounded border border-border overflow-hidden text-sm">
-          {(["single", "sweep"] as Mode[]).map((m) => (
+          {(["single", "sweep", "battle"] as Mode[]).map((m) => (
             <button
               key={m}
               className={`px-3 py-1.5 ${mode === m ? "bg-active text-normal" : "bg-panel text-muted hover:bg-hover"}`}
               onClick={() => setMode(m)}
             >
-              {m === "single" ? "Single fight" : "What-if sweep"}
+              {m === "single" ? "Single fight" : m === "sweep" ? "What-if sweep" : "Battle map"}
             </button>
           ))}
         </div>
@@ -149,20 +160,22 @@ export default function SimulatorPage() {
               </select>
             </label>
           )}
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted">Trials{mode === "sweep" ? " / point" : ""}</span>
-            <select
-              className="min-w-24"
-              value={setup.trials}
-              onChange={(e) => persist({ ...setup, trials: Number(e.target.value) })}
-            >
-              {TRIAL_CHOICES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
+          {mode !== "battle" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-muted">Trials{mode === "sweep" ? " / point" : ""}</span>
+              <select
+                className="min-w-24"
+                value={setup.trials}
+                onChange={(e) => persist({ ...setup, trials: Number(e.target.value) })}
+              >
+                {TRIAL_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-muted">Seed</span>
             <input
@@ -173,7 +186,7 @@ export default function SimulatorPage() {
             />
           </label>
           <Button variant="primary" onClick={() => void run()} disabled={busy}>
-            {running ? "Running…" : mode === "single" ? "Run simulation" : "Run sweep"}
+            {running ? "Running…" : mode === "single" ? "Run simulation" : mode === "sweep" ? "Run sweep" : "Run battle"}
           </Button>
         </div>
         {mode === "sweep" && (
@@ -191,7 +204,193 @@ export default function SimulatorPage() {
         <Results result={result} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
       )}
       {sweep && !running && mode === "sweep" && <SweepResults out={sweep} />}
+      {battle && !running && mode === "battle" && <BattleMap key={battleNonce} run={battle} />}
+      {mode === "battle" && !battle && !running && (
+        <p className="text-xs text-muted">
+          A single fight on a 5-ft grid — watch the AI move, take cover, and trade blows turn by turn. Diagonals use the PHB 5-10-5 rule.
+        </p>
+      )}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------- battle map
+
+const TERRAIN_CLASS: Record<string, string> = {
+  "#": "text-muted/70",
+  "~": "text-emerald-600/60 dark:text-emerald-400/50",
+  "!": "text-danger/60",
+  o: "text-amber-600/60 dark:text-amber-400/50",
+};
+
+function BattleMap({ run }: { run: BattleRun }) {
+  const frames = run.frames;
+  const [idx, setIdx] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState(450);
+  const logRef = useRef<HTMLDivElement>(null);
+  const atEnd = idx >= frames.length - 1;
+
+  useEffect(() => {
+    if (!playing || atEnd) return;
+    const t = setTimeout(() => setIdx((i) => i + 1), speed);
+    return () => clearTimeout(t);
+  }, [playing, idx, speed, atEnd]);
+
+  const togglePlay = () => {
+    if (atEnd) {
+      setIdx(0);
+      setPlaying(true);
+    } else {
+      setPlaying((p) => !p);
+    }
+  };
+
+  const frame = frames[Math.min(idx, frames.length - 1)];
+  const dims = frames[0].terrain!;
+  const terrain = dims.tiles;
+
+  // unit occupying (x,y) in this frame
+  const unitAt = useMemo(() => {
+    const m = new Map<string, UnitSnap>();
+    for (const u of frame.units) {
+      if (!u.alive) continue;
+      for (let dy = 0; dy < u.fp; dy++) for (let dx = 0; dx < u.fp; dx++) m.set(`${u.x + dx},${u.y + dy}`, u);
+    }
+    return m;
+  }, [frame]);
+  const templateSet = useMemo(() => new Set(frame.templateCells ?? []), [frame]);
+  const pathSet = useMemo(
+    () => new Set((frame.path ?? []).slice(0, -1).map(([x, y]) => `${x},${y}`)),
+    [frame],
+  );
+
+  const logLines = useMemo(
+    () => frames.slice(0, idx + 1).filter((f) => f.text).map((f) => ({ seq: f.seq, round: f.round, text: f.text! })),
+    [frames, idx],
+  );
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [logLines.length]);
+
+  const roster = [...frame.units].sort((a, b) => (a.side === b.side ? a.glyph.localeCompare(b.glyph) : a.side === "party" ? -1 : 1));
+
+  return (
+    <section className="flex flex-col gap-3">
+      {/* transport */}
+      <div className="flex items-center gap-2 flex-wrap text-sm">
+        <div className="inline-flex rounded border border-border overflow-hidden">
+          <TBtn onClick={() => { setPlaying(false); setIdx(0); }} label="⏮" />
+          <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} label="◀" />
+          <TBtn onClick={togglePlay} label={playing && !atEnd ? "⏸" : "▶"} wide />
+          <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.min(frames.length - 1, i + 1)); }} label="▶▶" />
+          <TBtn onClick={() => { setPlaying(false); setIdx(frames.length - 1); }} label="⏭" />
+        </div>
+        <select className="text-xs" value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
+          <option value={900}>0.5×</option>
+          <option value={450}>1×</option>
+          <option value={220}>2×</option>
+          <option value={110}>4×</option>
+        </select>
+        <input
+          type="range"
+          min={0}
+          max={frames.length - 1}
+          value={idx}
+          onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }}
+          className="flex-1 min-w-40"
+        />
+        <span className="text-xs text-muted tabular-nums whitespace-nowrap">
+          R{frame.round} · {idx + 1}/{frames.length}
+        </span>
+      </div>
+
+      <p className="text-xs text-muted min-h-4">
+        <span className="uppercase tracking-wide">{frame.kind}</span>
+        {frame.text ? ` — ${frame.text}` : ""}
+      </p>
+
+      <div className="flex gap-4 flex-wrap items-start">
+        {/* the board */}
+        <div className="overflow-x-auto">
+          <div
+            className="inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2"
+            style={{ gridTemplateColumns: `repeat(${dims.width}, 1ch)`, fontSize: "13px" }}
+          >
+            {Array.from({ length: dims.width * dims.height }, (_, i) => {
+              const x = i % dims.width;
+              const y = Math.floor(i / dims.width);
+              const key = `${x},${y}`;
+              const u = unitAt.get(key);
+              const t = terrain[i] ?? ".";
+              const inTemplate = templateSet.has(key);
+              const onPath = pathSet.has(key);
+              let ch = t === "." ? "·" : t;
+              let cls = TERRAIN_CLASS[t] ?? "text-muted/25";
+              if (u) {
+                ch = u.glyph;
+                cls =
+                  u.side === "party"
+                    ? "text-accent font-semibold"
+                    : "text-danger font-semibold";
+                if (u.downed) cls = "text-muted/50";
+              } else if (onPath) {
+                ch = "•";
+                cls = "text-accent/40";
+              }
+              return (
+                <span
+                  key={i}
+                  className={`text-center ${cls} ${u?.isActor ? "bg-accent/20 rounded-sm" : inTemplate ? "bg-warning/20" : ""}`}
+                  style={{ height: "1.15em" }}
+                  title={u ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}` : undefined}
+                >
+                  {ch}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* roster + log */}
+        <div className="flex flex-col gap-3 min-w-52 flex-1">
+          <ul className="flex flex-col gap-1 text-xs">
+            {roster.map((u) => (
+              <li key={u.id} className={`flex items-center gap-2 ${!u.alive ? "opacity-40 line-through" : u.downed ? "opacity-60" : ""} ${u.isActor ? "font-semibold" : ""}`}>
+                <span className={`w-4 text-center font-mono ${u.side === "party" ? "text-accent" : "text-danger"}`}>{u.glyph}</span>
+                <span className="flex-1 truncate">{u.name}</span>
+                <span className="w-14 h-1.5 rounded bg-hover overflow-hidden">
+                  <span
+                    className={`block h-full ${u.side === "party" ? "bg-accent" : "bg-danger"}`}
+                    style={{ width: `${Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100))}%` }}
+                  />
+                </span>
+                <span className="tabular-nums text-muted w-14 text-right">{u.hp}/{u.maxHp}</span>
+                {u.conditions.length > 0 && <span className="text-warning">{u.conditions.join(",")}</span>}
+              </li>
+            ))}
+          </ul>
+          <div ref={logRef} className="text-xs text-muted bg-panel border border-border rounded p-2 max-h-40 overflow-y-auto flex flex-col gap-0.5">
+            {logLines.map((l) => (
+              <div key={l.seq}>
+                <span className="opacity-50">R{l.round}</span> {l.text}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TBtn({ onClick, label, wide }: { onClick: () => void; label: string; wide?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`${wide ? "px-3" : "px-2"} py-1 bg-panel text-muted hover:bg-hover hover:text-normal`}
+    >
+      {label}
+    </button>
   );
 }
 

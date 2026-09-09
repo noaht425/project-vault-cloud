@@ -33,6 +33,9 @@ import {
 import { validateCombatant } from "./validate";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
+import { runBattle } from "./battle";
+import type { BattleGrid } from "./battle/grid";
+import type { BattleFrame, UnitSnap } from "./battle/state";
 import {
   applyRace,
   applyFeats,
@@ -47,6 +50,7 @@ import {
 } from "./engine/pc-extras";
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
+export type { BattleFrame, UnitSnap, BattleGrid };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
 
@@ -231,6 +235,35 @@ export function runSim(setup: SimSetup): SimResult {
   const budget = encounterBudget(crs, avgLevel, setup.party.length);
 
   return { seed: setup.seed, mc, sample, budget };
+}
+
+// ------------------------------------------------------------------- battle mode
+
+export interface BattleRun {
+  frames: BattleFrame[];
+  winner: "party" | "monster" | "draw";
+  rounds: number;
+  seed: number;
+}
+
+/** One grid fight rendered as a frame stream, from the same setup Analyze uses.
+ *  `overrides.grid` / `overrides.placements` come from the map editor (Phase 3). */
+export function runBattleFromSetup(
+  setup: SimSetup,
+  overrides: { grid?: BattleGrid; placements?: Record<string, { x: number; y: number }>; seed?: number } = {},
+): BattleRun {
+  const enemies = enemyList(setup.enemies);
+  const extraById = customById(setup.customMonsters);
+  const seed = overrides.seed ?? setup.seed;
+  const out = runBattle({
+    party: setup.party,
+    enemies,
+    extraById,
+    grid: overrides.grid,
+    placements: overrides.placements,
+    seed,
+  });
+  return { frames: out.frames, winner: out.result.winner, rounds: out.result.rounds, seed };
 }
 
 export function defaultSetup(): SimSetup {

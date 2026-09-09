@@ -2,7 +2,7 @@
 // responsive during a long sweep); falls back to a synchronous run on the main
 // thread if workers aren't available.
 
-import { runSim, runSweep, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
+import { runSim, runSweep, runBattleFromSetup, type BattleRun, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -33,18 +33,24 @@ function getWorker(): Worker | null {
   return worker;
 }
 
-function send<T>(kind: "sim" | "sweep", setup: SimSetup, dim?: SweepDim): Promise<T> {
+function send<T>(kind: "sim" | "sweep" | "battle", setup: SimSetup, extra?: { dim?: SweepDim; seed?: number }): Promise<T> {
   const w = getWorker();
   if (!w) {
     // no worker — run synchronously (may block briefly)
-    return Promise.resolve(
-      (kind === "sim" ? runSim(setup) : runSweep(setup, dim!)) as unknown as T,
-    );
+    const sync =
+      kind === "sim" ? runSim(setup) : kind === "sweep" ? runSweep(setup, extra!.dim!) : runBattleFromSetup(setup, { seed: extra?.seed });
+    return Promise.resolve(sync as unknown as T);
   }
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-    w.postMessage(kind === "sim" ? { id, kind, setup } : { id, kind, setup, dim });
+    const msg =
+      kind === "sim"
+        ? { id, kind, setup }
+        : kind === "sweep"
+          ? { id, kind, setup, dim: extra!.dim }
+          : { id, kind, setup, seed: extra?.seed };
+    w.postMessage(msg);
   });
 }
 
@@ -53,5 +59,9 @@ export function runSimAsync(setup: SimSetup): Promise<SimResult> {
 }
 
 export function runSweepAsync(setup: SimSetup, dim: SweepDim): Promise<SweepOut> {
-  return send<SweepOut>("sweep", setup, dim);
+  return send<SweepOut>("sweep", setup, { dim });
+}
+
+export function runBattleAsync(setup: SimSetup, seed?: number): Promise<BattleRun> {
+  return send<BattleRun>("battle", setup, { seed });
 }
