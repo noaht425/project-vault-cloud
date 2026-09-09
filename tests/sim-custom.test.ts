@@ -380,23 +380,28 @@ describe("import a PC from its note", () => {
     expect(r.warnings.join(" ")).toMatch(/unrecognised class/i);
   });
 
-  it("reads Extra Attack / Sneak Attack / Rage out of a class-reference body", () => {
+  it("reads Extra Attack / a homebrew Sneak buff / Rage / Uncanny Dodge out of a class-reference body", () => {
     const body = `## Level 2
 Cunning Action.
-## Level 5
-Extra Attack. You can attack twice.
+## Level 5 Extra Attack
+You can attack twice.
 ## Level 11
 You can attack three times when you take the Attack action.
 ## Level 3
-Your Sneak Attack deals an extra 2d6 damage.
+Your Sneak Attack deals an extra 8d6 damage instead of the normal amount.
+## Level 5 Uncanny Dodge
+Use your reaction to halve an attack's damage.
 ## Level 6
 Path of the Berserker. You gain Rage.`;
     const f6 = parseClassRefFeatures(body, 6);
     expect(f6.extraAttack).toBe(2);
-    expect(f6.sneakDice).toBe(2);
+    expect(f6.sneakDice).toBe(8); // above the by-level baseline -> an explicit override
     expect(f6.rage).toBe(true);
+    expect(f6.uncannyDodge).toBe(true);
     const f12 = parseClassRefFeatures(body, 12);
     expect(f12.extraAttack).toBe(3);
+    // a ref that only quotes the level-1 "1d6" is ignored (the by-level table wins)
+    expect(parseClassRefFeatures("## Level 1 Sneak Attack\nyou deal an extra 1d6 damage; it increases per the table.", 13).sneakDice).toBeUndefined();
   });
 
   it("a class reference bumps the attack count on the built PC", () => {

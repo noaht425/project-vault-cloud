@@ -981,19 +981,26 @@ export interface ClassRefFeatures {
   ki?: boolean;
   superiority?: boolean;
   divineSmite?: boolean;
+  /** a bonus-action follow-up attack (Two-Weapon Fighting, Psychic Blades, …) */
+  bonusAttack?: boolean;
+  uncannyDodge?: boolean;
+  evasion?: boolean;
+  /** saving-throw proficiencies the subclass grants ("Slippery Mind" → wis) */
+  extraSaves?: Ability[];
   found: string[];
 }
 
 /** Scan a class-reference note's "## Level ≤ N" sections for feature markers. */
 export function parseClassRefFeatures(body: string, level: number): ClassRefFeatures {
-  // sections: "## Level N ..." up to the next such heading
-  const heads = [...body.matchAll(/^##\s*Level\s*(\d+)\b.*$/gim)];
+  // sections: "## Level N <feature name>" up to the next such heading. The
+  // feature name usually lives ONLY in the heading, so keep that part.
+  const heads = [...body.matchAll(/^#{1,3}\s*Level\s*(\d+)\b([^\n]*)$/gim)];
   let text = "";
   for (let i = 0; i < heads.length; i++) {
     if (Number(heads[i][1]) > level) continue;
     const start = heads[i].index! + heads[i][0].length;
     const end = i + 1 < heads.length ? heads[i + 1].index! : body.length;
-    text += " " + body.slice(start, end);
+    text += " " + (heads[i][2] ?? "") + " " + body.slice(start, end);
   }
   if (!heads.length) text = body; // no level headings — treat the whole note as "applies"
 
@@ -1011,8 +1018,14 @@ export function parseClassRefFeatures(body: string, level: number): ClassRefFeat
   for (const m of text.matchAll(/\bextra attack\s*\((\d)\)/gi)) ea = Math.max(ea, Number(m[1]) + 1);
   if (!ea && /\bextra attack\b/i.test(text)) ea = 2;
   if (ea >= 2) { f.extraAttack = ea; f.found.push(`Extra Attack (${ea})`); }
+  // Sneak Attack — the ref usually quotes the level-1 "1d6" and points at the
+  // table for the rest, so only treat an explicit number as authoritative when
+  // it's above the by-level baseline (a homebrew buff).
   const sa = /sneak attack[^.]*?(\d+)\s*d6|(\d+)\s*d6[^.]*?sneak/i.exec(text);
-  if (sa) { f.sneakDice = Number(sa[1] ?? sa[2]); f.found.push(`Sneak Attack (${f.sneakDice}d6)`); }
+  if (sa) {
+    const n = Number(sa[1] ?? sa[2]);
+    if (n > Math.ceil(level / 2)) { f.sneakDice = n; f.found.push(`Sneak Attack (${n}d6)`); }
+  }
   if (/\bspellcasting\b|\bspell slots?\b|\bcast (?:a )?spells?\b|\bpact magic\b/i.test(text)) {
     const lv = /(\d)(?:st|nd|rd|th)[- ]?level spells?/i.exec(text);
     if (lv) { f.maxSpellLevel = Number(lv[1]); f.found.push(`Spellcasting (to ${f.maxSpellLevel}${["", "st", "nd", "rd"][f.maxSpellLevel] ?? "th"} level)`); }
@@ -1026,6 +1039,20 @@ export function parseClassRefFeatures(body: string, level: number): ClassRefFeat
   if (/\bki\b|ki points?|martial arts|flurry of blows/i.test(text)) { f.ki = true; f.found.push("Ki / Martial Arts"); }
   if (/superiority dic|combat superiority|maneuvers?/i.test(text)) { f.superiority = true; f.found.push("Superiority Dice"); }
   if (/divine smite/i.test(text)) { f.divineSmite = true; f.found.push("Divine Smite"); }
+  // a bonus-action extra swing — Two-Weapon Fighting, Psychic Blades, Thirsting Blade, …
+  if (/(?:second|another|additional|off-hand|bonus[- ]action)[^.]{0,60}\battack\b|\battack\b[^.]{0,40}\bas a bonus action\b|two-weapon fighting/i.test(text)) {
+    f.bonusAttack = true; f.found.push("bonus-action attack");
+  }
+  if (/uncanny dodge/i.test(text)) { f.uncannyDodge = true; f.found.push("Uncanny Dodge"); }
+  if (/\bevasion\b/i.test(text)) { f.evasion = true; f.found.push("Evasion"); }
+  const saves: Ability[] = [];
+  for (const m of text.matchAll(/proficiency in (\w+)(?:\s+and\s+(\w+))? saving throws?/gi)) {
+    for (const g of [m[1], m[2]]) {
+      const a = (g ?? "").slice(0, 3).toLowerCase();
+      if ((ABILITIES as readonly string[]).includes(a) && !saves.includes(a as Ability)) saves.push(a as Ability);
+    }
+  }
+  if (saves.length) { f.extraSaves = saves; f.found.push(`save prof: ${saves.join(", ")}`); }
   return f;
 }
 
@@ -1070,7 +1097,7 @@ function martialPc(
   const usesDex = dexMod > strMod || cls === "rogue" || cls === "monk";
   const atkMod = usesDex ? dexMod : strMod;
   const toHit = pb + atkMod;
-  const swings = cf.extraAttack ?? attackCount(cls, level);
+  const swings = Math.max(cf.extraAttack ?? 0, attackCount(cls, level));
   const monkDie = level >= 17 ? 10 : level >= 11 ? 8 : level >= 5 ? 6 : 4;
   const baseDie = cls === "monk" ? `1d${monkDie}` : usesDex ? "1d8" : "2d6";
   const perHit = `${baseDie}+${atkMod}`;
@@ -1078,7 +1105,7 @@ function martialPc(
   const dmgType: DamageType = cls === "monk" ? "bludgeoning" : usesDex ? "piercing" : "slashing";
   const mkOnHit = (): AutomationNode[] => {
     const nodes: AutomationNode[] = [{ type: "damage", amount: perHit, damageType: dmgType }];
-    if (cls === "rogue") nodes.push({ type: "damage", amount: `${cf.sneakDice ?? Math.ceil(level / 2)}d6`, damageType: dmgType });
+    if (cls === "rogue") nodes.push({ type: "damage", amount: `${Math.max(cf.sneakDice ?? 0, Math.ceil(level / 2))}d6`, damageType: dmgType });
     return nodes;
   };
 
@@ -1087,7 +1114,7 @@ function martialPc(
   const reactions: Combatant["actions"] = [];
   const opener: string[] = [];
 
-  const nSwings = cls === "monk" ? swings + 1 : swings;
+  const nSwings = (cls === "monk" ? swings + 1 : swings) + (cf.bonusAttack ? 1 : 0);
   const attackEffects: AutomationNode[] = Array.from({ length: nSwings }, (): AutomationNode => ({
     type: "attack", bonus: toHit,
     ...(cls === "barbarian" ? { adv: "adv" as const } : {}),
@@ -1133,7 +1160,7 @@ function martialPc(
     opener.unshift("rage");
   }
   if (cls === "monk" || cf.ki) resources.ki = { max: Math.max(2, level), recharge: "shortRest" };
-  if ((cls === "fighter" && cf.superiority) || cf.superiority) {
+  if (cf.superiority) {
     resources.superiority = { max: 4 + (level >= 15 ? 1 : 0), recharge: "shortRest" };
     reactions.push({
       id: "riposte", name: "Riposte", cost: { reaction: 1 }, recharge: "none",
@@ -1141,7 +1168,17 @@ function martialPc(
       automation: [{ type: "useAction", action: "attack", times: 1 }],
     });
   }
-  const saves = CLASS_SAVES[cls];
+  if (cf.uncannyDodge) {
+    reactions.push({
+      id: "uncanny-dodge", name: "Uncanny Dodge", cost: { reaction: 1 }, recharge: "none",
+      trigger: "self.wasHitByAttack",
+      automation: [{ type: "note", text: "halves the triggering attack's damage (engine hook)" }],
+    });
+  }
+  if (cf.evasion) traits.push({ id: "evasion", name: "Evasion", trigger: "always", automation: [], text: "no damage on a made Dex save, half on a fail (engine hook)" });
+
+  const saves: Ability[] = [...CLASS_SAVES[cls]];
+  for (const s of cf.extraSaves ?? []) if (!saves.includes(s)) saves.push(s);
   const proficientSaves = cls === "monk" && level >= 14 ? [...ABILITIES] : saves;
 
   return {
@@ -1166,7 +1203,7 @@ export function pcNoteToCombatant(note: PcNoteInput): PcBuildResult {
     ? parseClassRefFeatures(note.classRefBody, level)
     : { found: [] as string[] };
   if (note.classRefBody && cf.found.length) warnings.push(`class reference: ${cf.found.join(", ")}`);
-  else if (note.classRefBody) warnings.push("class reference found but no recognisable features in it");
+  else if (note.classRefBody) warnings.push("class reference read — nothing in it changes the fight math, so this is a plain base-class build");
 
   if (!key) {
     // fall back to the nearest template, but overlay the note's real numbers
