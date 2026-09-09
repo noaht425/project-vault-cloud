@@ -59,7 +59,7 @@ function actionAvailable(state: CombatState, u: CombatantState, a: Action): bool
     );
     if (!anyFoe) return false;
   }
-  // a conditionally-gated action (e.g. "if she sang since her last turn -> raise the Drowned")
+  // a conditionally-gated action (e.g. "if it sang since its last turn -> raise its minions")
   if (actionBranchGateFails(state, u, a)) return false;
   return true;
 }
@@ -142,7 +142,7 @@ export function takeMonsterTurn(state: CombatState, u: CombatantState): void {
     }
   }
 
-  // round-1 opener (Frightful Presence, Vendetta, ...)
+  // round-1 opener (Frightful Presence, a mark-a-foe opener, ...)
   if (state.round === 1 && u.ref.ai.opener.length) {
     const opener = pick(state, u, u.ref.ai.opener);
     if (opener) {

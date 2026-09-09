@@ -49,8 +49,8 @@ export interface CombatantState {
   onceFired: Set<string>; // trait.once ids, "undyingReturn", "bloodied"
   markedTargetId?: string;
   summonerId?: string;     // set on spawned minions -> the combatant that summoned them
-  lastSangRound?: number;  // last round this combatant used a "song" action (Luring Song)
-  d20SwapsLeft?: number;   // It That Will Be — d20-replacement uses left this round
+  lastSangRound?: number;  // last round this combatant used a "song" action
+  d20SwapsLeft?: number;   // d20Replacement — uses left this round
   meleeHitSinceMyTurn?: boolean; // a melee PC has connected -> a keep-distance monster will withdraw (provoking)
   assassinateUntilRound?: number; // Ambush: while state.round <= this, hits have advantage and auto-crit
 

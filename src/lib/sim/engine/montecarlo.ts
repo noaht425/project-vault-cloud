@@ -66,7 +66,7 @@ export function monteCarlo(monsters: Combatant[], opts: RunOptions & { trials?: 
 
     for (const c of r.contributions) {
       if (c.dealt <= 0) continue;
-      // collapse a swarm of identical minions ("Drowned Blade 3" -> "Drowned Blade")
+      // collapse a swarm of identical minions ("Zombie 3" -> "Zombie")
       const key = c.isMinion ? c.name.replace(/\s*#?\d+$/, "").trim() || c.name : c.name;
       const e = dealtBy.get(key) ?? { side: c.side, total: 0 };
       e.total += c.dealt;

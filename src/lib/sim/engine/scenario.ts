@@ -1,5 +1,5 @@
 // Build a real party from a list of template specs, and run a scenario
-// ("test PCs a, b, c, d at level 15 vs Pyrrha; now bump b and c a level").
+// ("test PCs a, b, c, d at level 15 vs a boss; now bump b and c a level").
 
 import type { Combatant } from "../schema";
 import { FIXTURES_BY_ID } from "../fixtures";
@@ -47,7 +47,7 @@ export interface ScenarioInput {
 
 /**
  * Resolve an enemy list into combatants. Each entry is a fixture id or a minion
- * id, optionally with a count: "chain-devil x3", "fungal-thrall x4". Repeats get
+ * id, optionally with a count: "chain-devil x3", "wolf x4". Repeats get
  * unique ids / names so the engine and the log can tell them apart.
  */
 function resolveEnemies(ids: string[], extraById?: Record<string, Combatant>): Combatant[] {

@@ -155,7 +155,7 @@ template — all one‑line edits.
 - [x] **Phase 3 (part 2c)** — **the reaction system.** `engine/reactions.ts`. Combatants spend their reaction. The engine calls in at four moments:
   - **an attack roll is about to be finalised** — the target may cast **Shield** (+5 AC) or a "the blow simply misses" defensive reaction (saved for crits / when low).
   - **damage is about to land** — **Uncanny Dodge** halves one attack. The generic party carries a single "Defensive Reaction" (halve a hit, 1/round) from level 9 up.
-  - **damage has landed** — **Bloodied Breath** (recharge + re-use a breath the first time the boss crosses half HP), a thunder-punish retaliation, a "react to 30+ from one source" buffet.
+  - **damage has landed** — recharge and re-fire a breath the first time the creature is bloodied, a thunder-punish retaliation, a "react to 30+ from one source" buffet.
   - **a spell is cast** — a PC may **Counterspell** an enemy spell (control / big save-or-suck only).
   - `canTakeReactions` gates every one, so a "no reactions" rider actually shuts reactions off. Reactions never trigger reactions (`state.inReaction`).
 - [x] **Phase 3 (part 2d)** — **opportunity attacks + monster Counterspell.**
@@ -164,7 +164,7 @@ template — all one‑line edits.
 - [x] **Phase 3 (part 3) — the analysis + depth pass.**
   - **What-if sweeps** (`engine/sweep.ts`, `scenarioSweep` / `levelLadder` / `rosterCheck` in `scenario.ts`). `RunOptions.tuning` carries six knobs — `monsterHpMult`, `monsterToHitDelta`, `monsterDcDelta`, `monsterDamageMult`, `partyToHitDelta`, `partyDamageMult`. `sweep(monsters, base, "monsterHpMult", [0.7…1.5])` runs a Monte-Carlo per value. The tuning instrument: *"this block at 1.0× HP wins 0.05 for the party, at 1.3× it's 0.79."*
   - **Damage attribution.** `CombatResult.contributions` (per-combatant dealt / taken / `downedRound`) and `state.firstPartyDown{Round,Id}`. `MonteCarloResult` carries `partyDamage` / `monsterDamage`, `firstDownRoundP50`, `anyDownRate`, `firstToFall`. `damageReport(result)` is the plain-text read.
-  - **Forced Endurance** — `maybeForcedEndurance` in `rollSave`: a creature with an `endurance` resource can, on a failed control save, add its CON and eat escalating force damage instead. Tried before Legendary Resistance, capped so the self-harm doesn't exceed the effect.
+  - **Endurance rider** — `maybeForcedEndurance` in `rollSave`: a creature with an `endurance` resource can, on a failed control save, add its CON and eat escalating force damage instead. Tried before Legendary Resistance, capped so the self-harm doesn't exceed the effect.
   - **Concentration** matters. `action.concentration: true`; the caster tracks `concentratingOn`; a failed CON save on damage, a stun-lock, or casting a new concentration spell calls `breakConcentration`, which strips those effects across every combatant.
 - [x] **Phase 3 (part 4) — multi-monster + party depth.**
   - **Multi-monster.** `enemies` entries take a count — `"chain-devil x3"` — resolving against both `FIXTURES_BY_ID` and the minion registry, with unique ids / names. `state.monsterFocusId` mirrors the party's `focusId` so a pack concentrates fire. `encounterBudget(crs, level, size)` gives the DMG XP-budget rating (`easy`…`overwhelming`, `deadlyRatio`) for a pile of monsters.

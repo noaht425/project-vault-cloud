@@ -92,8 +92,8 @@ function evalExpr(expr: string, ctx: RunCtx): boolean {
     [/round\s*>=\s*(\d+)/i, () => st.round >= Number(RegExp.$1)],
     [/self\.has\('([^']+)'\)/i, () => s.effects.some((e) => e.name === RegExp.$1) || hasCondition(s, RegExp.$1 as Condition)],
     [/self\.resource\('([^']+)'\)\s*>\s*0/i, () => (s.resources.get(RegExp.$1) ?? 0) > 0],
-    // The party walks into her lair mid-song, and she sustains Luring Song as a
-    // bonus action — so she counts as "singing" from round 1 until she drops.
+    // A caster can walk in mid-song and sustain a charm-song as a bonus action —
+    // so it counts as "singing" from round 1 until it drops.
     [/self\.(is_?singing|singing)/i, () => s.alive && (st.round <= 1 || s.lastSangRound !== undefined)],
     [/self\.sang_?since_?last_?turn/i, () => s.alive && (st.round <= 1 || s.lastSangRound !== undefined)],
     [/target\.has\('([^']+)'\)/i, () => !!tgt && (tgt.effects.some((e) => e.name === RegExp.$1) || hasCondition(tgt, RegExp.$1 as Condition))],
@@ -402,7 +402,7 @@ export function runAction(
 ): void {
   if (isIncapacitated(source)) return;
 
-  // track "is she singing?" for summon gates (Kalinekra's Luring Song)
+  // track "is it singing?" for summon gates (a song-driven raise-minions ability)
   if (/\b(song|sing)\b/i.test(action.name)) source.lastSangRound = state.round;
 
   // a spell can be Counterspelled by the other side before it resolves
@@ -435,7 +435,7 @@ export function runAction(
   for (const u of state.units.values()) {
     const delta = (before.get(u.id) ?? 0) - (u.hp + u.tempHp);
     // an ally *losing* HP during my action is reaction / aura collateral (a
-    // triggered breath, Aura of Decay) — that reaction logs its own line, so
+    // triggered breath, a damaging aura) — that reaction logs its own line, so
     // don't double-count it here. Ally healing still shows.
     if (u.side === source.side && u.id !== source.id && delta > 0) continue;
     const newConds = [...u.conditions.keys()].filter((c) => !condsBefore.get(u.id)?.has(c));

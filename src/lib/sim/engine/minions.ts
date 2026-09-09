@@ -134,9 +134,72 @@ const chainDevil = minion({
   ],
 });
 
+// Light SRD stand-ins for the party's summon spells (Animate Dead, Conjure
+// Animals, Giant Insect, …) so those spells actually field something.
+const zombie = minion({
+  id: "zombie",
+  name: "Zombie",
+  cr: "1/4",
+  ac: 8,
+  maxHp: "3d8+9",
+  speeds: { walk: 20 },
+  abilities: { str: 13, dex: 6, con: 16, int: 3, wis: 6, cha: 5 },
+  pb: 2,
+  immunities: ["poison"],
+  conditionImmunities: ["poisoned"],
+  actions: [
+    {
+      id: "slam",
+      name: "Slam",
+      cost: { action: 1 },
+      recharge: "none",
+      automation: [
+        { type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: 3, onHit: [{ type: "damage", amount: "1d6+1", damageType: "bludgeoning" }] }] },
+      ],
+    },
+  ],
+});
+
+const wolf = minion({
+  id: "wolf",
+  name: "Wolf",
+  cr: "1/4",
+  ac: 13,
+  maxHp: "2d8+2",
+  speeds: { walk: 40 },
+  abilities: { str: 12, dex: 15, con: 12, int: 3, wis: 12, cha: 6 },
+  pb: 2,
+  actions: [
+    {
+      id: "bite",
+      name: "Bite",
+      cost: { action: 1 },
+      recharge: "none",
+      automation: [
+        {
+          type: "target",
+          who: { who: "aiChoice" },
+          effects: [
+            {
+              type: "attack",
+              bonus: 4,
+              onHit: [
+                { type: "damage", amount: "2d4+2", damageType: "piercing" },
+                { type: "save", ability: "str", dc: 11, onFail: [{ type: "applyCondition", condition: "prone", durationRounds: 1 }] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
 export const MINIONS: Record<string, Combatant> = {
   "fire-elemental": fireElemental,
   "chain-devil": chainDevil,
+  zombie,
+  wolf,
 };
 
 /**

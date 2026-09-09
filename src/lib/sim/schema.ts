@@ -33,7 +33,7 @@ export const damageTypeSchema = z.enum(DAMAGE_TYPES);
 export type DamageType = (typeof DAMAGE_TYPES)[number];
 
 // Condition ids. The first block mirrors src/lib/conditions.ts (lowercased);
-// the second block is the homebrew riders our stat blocks introduce.
+// the second block is the custom riders our stat blocks can introduce.
 export const CONDITIONS = [
   "blinded", "charmed", "deafened", "frightened", "grappled", "incapacitated",
   "invisible", "paralyzed", "petrified", "poisoned", "prone", "restrained",
@@ -95,9 +95,9 @@ export const effectModsSchema = z.object({
   attacksAgainstItAdvantage: advModeSchema.optional(),
   damageTakenMultiplier: z.number().optional(),     // 0.5 = resistance-like, 2 = vulnerability, 1 = none
   extraDamageOnHit: z.object({ amount: diceSchema, damageType: damageTypeSchema }).optional(),
-  attackDiceMultiplier: z.number().int().optional(),// Pyrrha "Cruelty Unleashed" doubled dice
-  cannotHeal: z.boolean().optional(),               // Charis aura, wight-style
-  maxHpReduction: diceSchema.optional(),            // Festering Wounds
+  attackDiceMultiplier: z.number().int().optional(),// a "doubled dice" phase buff
+  cannotHeal: z.boolean().optional(),               // a "can't be healed" aura (wight-style)
+  maxHpReduction: diceSchema.optional(),            // a max-HP-drain rider
   speedZero: z.boolean().optional(),
   noReactions: z.boolean().optional(),              // Concussed
   disadvantageOnFirstD20EachRound: z.boolean().optional(), // "doomed"
@@ -213,13 +213,13 @@ export const specialRuleSchema = z.discriminatedUnion("rule", [
   z.object({ rule: z.literal("magicResistance") }),
   z.object({ rule: z.literal("legendaryResistance"), perDay: z.number().int().positive() }),
   z.object({ rule: z.literal("flatDamageReduction"), amount: z.number().int().positive() }),        // Zaros "Deathless Scales"
-  z.object({ rule: z.literal("resistNonAdvantageAttacks") }),                                        // Pyrrha
+  z.object({ rule: z.literal("resistNonAdvantageAttacks") }),                                        // resist any attack made without advantage
   z.object({ rule: z.literal("advantageOnSaves"), abilities: z.array(abilitySchema) }),              // "Unbroken Will"
   z.object({ rule: z.literal("uncontainable"), note: z.string().optional() }),                       // Unbound / Formless / Step Between Moments
-  z.object({ rule: z.literal("denyAdvantageToAttackers") }),                                         // It That Will Be "It Has Been Seen"
+  z.object({ rule: z.literal("denyAdvantageToAttackers") }),                                         // attackers never get advantage vs this creature
   z.object({ rule: z.literal("cannotBeSurprised") }),                                                // sphinxes, All That Has Happened
   z.object({
-    rule: z.literal("d20Replacement"),                                                              // It That Will Be "That Which Will Come"
+    rule: z.literal("d20Replacement"),                                                              // once/round, rewrite a nearby d20 to a pre-seen face
     range: z.number().int().positive(),                                                             // feet within which it can nudge a d20
     perRound: z.number().int().positive().default(1),
     // rolled value (1..20) -> the three faces it may swap to (the neighbours on the die)
@@ -232,9 +232,9 @@ export const specialRuleSchema = z.discriminatedUnion("rule", [
     onReturn: z.array(automationNodeSchema).optional(),
   }),
   z.object({ rule: z.literal("critRange"), value: z.number().int().min(2).max(20) }),                // Invincible Conqueror 19-20
-  z.object({ rule: z.literal("minionGuard"), chance: z.number().min(0).max(1) }),                    // Kalinekra — the Drowned interpose; a hit on her lands on a minion instead
-  z.object({ rule: z.literal("acMeltOnHit"), amount: z.number().int().positive(), min: z.number().int() }), // Amol "Dissolving Strikes" — each hit shaves AC
-  z.object({ rule: z.literal("noReactionsAfter"), damageType: damageTypeSchema }),                   // Vari "Concussed" — thunder damage strips reactions for a round
+  z.object({ rule: z.literal("minionGuard"), chance: z.number().min(0).max(1) }),                    // summoned minions interpose; a hit on the summoner lands on a minion instead
+  z.object({ rule: z.literal("acMeltOnHit"), amount: z.number().int().positive(), min: z.number().int() }), // each physical hit shaves the target's AC, stacking
+  z.object({ rule: z.literal("noReactionsAfter"), damageType: damageTypeSchema }),                   // a damage type that strips the target's reactions for a round
   z.object({ rule: z.literal("ambush") }),                                                          // acts first on round 1; its round-1 hits have advantage and auto-crit (Assassinate)
 ]);
 export type SpecialRule = z.infer<typeof specialRuleSchema>;
@@ -319,7 +319,7 @@ export const lairActionsSchema = z.object({
 export const aiSchema = z.object({
   targetPriority: z.enum(["lowestHp", "squishiest", "marked", "nearest", "highestThreat"]).default("highestThreat"),
   aoeMinTargets: z.number().int().positive().default(2),          // only breathe/AoE if it catches at least this many
-  opener: z.array(z.string()).default([]),                        // action ids to prefer on round 1 (Frightful Presence, Vendetta)
+  opener: z.array(z.string()).default([]),                        // action ids to prefer on round 1 (Frightful Presence, a mark-a-foe opener)
   saveLegendaryResistanceFor: z.array(z.string()).default(["stunned", "paralyzed", "banished", "save-or-die", "controlled"]),
   keepDistance: z.boolean().default(false),
   neverRetreat: z.boolean().default(false),
@@ -374,7 +374,7 @@ export const combatantSchema = z.object({
 export type Combatant = z.infer<typeof combatantSchema>;
 
 // ------------------------------- scenarios -------------------------
-// This is the layer that makes "test A,B,C,D at level 15 vs Pyrrha, now bump
+// This is the layer that makes "test A,B,C,D at level 15 vs a boss, now bump
 // B and C a level" a one-number edit.
 
 export const pcSpecSchema = z.object({

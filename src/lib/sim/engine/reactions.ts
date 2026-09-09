@@ -1,12 +1,12 @@
 // The reaction system. No combatant used to spend its reaction — Shield,
-// Counterspell, Uncanny Dodge, the bosses' Bloodied Breath / Answering Peal /
-// Deceiver's Riposte / Forced to Watch all sat inert in `reactions[]`.
+// Counterspell, Uncanny Dodge, and a pile of monster reactions — recharge-a-breath-
+// when-bloodied, punish-the-attacker, riposte, react-to-a-drop — all sat inert in `reactions[]`.
 //
 // The engine calls into here at four moments: an attack roll is about to be
 // finalised (Shield / Weight of Ages), damage is about to land (Uncanny Dodge),
-// damage has landed (Bloodied Breath, Answering Peal, big-hit reactions), and a
+// damage has landed (recharge a breath when bloodied, punish the attacker, big-hit reactions), and a
 // spell is being cast (Counterspell). `canTakeReactions` gates every one, so
-// Concussed / stunned / a "no reactions" rider now actually shuts a creature's
+// concussed / stunned / a "no reactions" rider now actually shuts a creature's
 // reactions off. Reactions never trigger reactions (`state.inReaction`).
 
 import type { Action, AutomationNode } from "../schema";
@@ -17,13 +17,13 @@ type RKind =
   | "shieldAc"       // Shield — +5 AC, may turn this hit into a miss
   | "negateHit"      // Weight of Ages — the attack simply misses
   | "halveDamage"    // Uncanny Dodge — halve one attack's damage
-  | "retaliateOnHit" // Deceiver's Riposte — hit back when hit
-  | "retaliateOnMiss"// Riposte — hit back when a melee attack misses
+  | "retaliateOnHit" // riposte — hit back when hit
+  | "retaliateOnMiss"// riposte — hit back when a melee attack misses
   | "counterspell"   // negate an enemy spell
-  | "onBloodied"     // Bloodied Breath — recharge + re-use a breath
-  | "onDamaged"      // Answering Peal — punish the source of any attack/spell damage
-  | "onBigHit"       // Static Surge / Billowing Wings — react to 30+ from one source
-  | "onDrop"         // Forced to Watch — react to a creature hitting 0 hp
+  | "onBloodied"     // recharge + re-use a breath the first time it is bloodied
+  | "onDamaged"      // punish the source of any attack/spell damage
+  | "onBigHit"       // react to 30+ damage from one source
+  | "onDrop"         // react to a creature hitting 0 hp
   | "unknown";
 
 function classify(r: Action): RKind {
@@ -124,7 +124,7 @@ export function reduceIncomingDamage(
 
 // --------------------------------------------------------- attack hit or missed
 
-/** Deceiver's Riposte (hit back when hit) / Riposte (hit back when a melee attack misses). */
+/** Riposte — hit back when hit, or when a melee attack misses. */
 export function reactToAttackResolved(
   state: CombatState,
   p: { attacker: CombatantState; target: CombatantState; hit: boolean; melee: boolean },
@@ -143,7 +143,7 @@ export function reactToAttackResolved(
 
 /**
  * Called at the end of `applyDamage`. Fires the damaged creature's own
- * post-damage reactions (Bloodied Breath, Answering Peal, big-hit reactions).
+ * post-damage reactions (recharge-a-breath-when-bloodied, punish-the-attacker, big-hit reactions).
  */
 export function reactToDamageTaken(
   state: CombatState,
@@ -210,7 +210,7 @@ function basicSwing(u: CombatantState): AutomationNode | undefined {
 
 /**
  * `mover` is stepping away from melee. Up to `cap` living enemies in the melee
- * zone that still have their reaction (and aren't Concussed / stunned) get one
+ * zone that still have their reaction (and aren't concussed / stunned) get one
  * opportunity attack. Teleporting away never triggers this.
  */
 export function provokeOpportunityAttacks(state: CombatState, mover: CombatantState, cap = 2): void {

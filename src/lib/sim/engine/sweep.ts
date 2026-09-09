@@ -1,6 +1,6 @@
 // What-if sweeps: run the same fight across a range of one knob and see how the
 // win rate moves. This is what turns the sim from "here's the number" into a
-// tuning instrument — "Amol at +100 HP: win 0.86 -> 0.58", "party +1 to hit:
+// tuning instrument — "the boss at +100 HP: win 0.86 -> 0.58", "party +1 to hit:
 // 0.46 -> 0.61".
 
 import type { Combatant } from "../schema";

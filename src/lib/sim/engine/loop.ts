@@ -178,7 +178,7 @@ export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatS
 // ---------------------------------------------------------------- turn phases
 
 function startOfTurn(state: CombatState, u: CombatantState): void {
-  // effect ticks (DoT: Burning, luring song, molten ground, ...)
+  // effect ticks (DoT: Burning, charm-song, molten ground, ...)
   for (const e of [...u.effects]) {
     if (e.tick && e.tick.length) {
       runAutomation(e.tick, { state, source: u, scope: [u], last: {}, depth: 0 });
@@ -255,7 +255,7 @@ function trySaveEndsCondition(state: CombatState, u: CombatantState, name: strin
   if (roll >= c.saveEnds.dc) {
     u.conditions.delete(name as never);
     // charm-style effects apply "charmed" + "incapacitated" together (Beguiling
-    // Rot, Luring Song) — one save frees you from both.
+    // Rot, a charm-song) — one save frees you from both.
     if ((name === "charmed" || name === "incapacitated")) {
       const sib = name === "charmed" ? "incapacitated" : "charmed";
       const s = u.conditions.get(sib as never);
@@ -277,7 +277,7 @@ function rollDeathSave(state: CombatState, u: CombatantState): void {
 
 // -------------------------------------------------------------------- end check
 
-/** Kalinekra's Drowned (and Indri's duplicates) wink out the instant their summoner dies. */
+/** Flagged summoned minions wink out the instant their summoner dies. */
 function cullRevertedMinions(state: CombatState): void {
   for (const m of state.units.values()) {
     if (!m.alive || !isMinion(m)) continue;

@@ -36,7 +36,7 @@ function ruleActive(u: CombatantState, rule: string): boolean {
   return u.ref.specialRules.some((r) => r.rule === rule);
 }
 
-// ---------------------------------------------------- It That Will Be: precognition
+// ---------------------------------------------------- precognition (d20 replacement)
 // Once per round it may replace a d20 rolled by a nearby creature with one of three
 // pre-seen faces. We only spend it defensively: turn a party hit into a miss, or a
 // party save that would succeed into a failure — whichever the current roll is.
@@ -207,14 +207,14 @@ export function rollSave(
   const face = precogSwap(state, target, used, succeeds(used), succeeds);
   const passed = succeeds(face);
 
-  // Abaddon's Forced Endurance — add CON to a failed save, at an escalating self-cost
+  // the endurance rider — add CON to a failed save, at an escalating self-cost
   if (!passed && maybeForcedEndurance(state, target, face + mod, dc, opts.stakes ?? "damage")) {
     return { passed: true, usedLegendaryResistance: false };
   }
   return maybeLegendary(state, target, passed, opts);
 }
 
-/** Forced Endurance: +CON mod to a save it just failed; +1 Endurance held and NdX force per point held. */
+/** Endurance rider: +CON mod to a save it just failed; +1 Endurance point held and NdX force per point held. */
 function maybeForcedEndurance(
   state: CombatState,
   target: CombatantState,
@@ -222,7 +222,7 @@ function maybeForcedEndurance(
   dc: number,
   stakes: SaveStakes,
 ): boolean {
-  if (!target.ref.traits.some((t) => t.id === "forced-endurance" || /forced endurance/i.test(t.name))) return false;
+  if (!target.ref.resources.endurance) return false; // opt-in: a block that declares an `endurance` pool
   if (stakes === "damage") return false; // only worth the pain to shrug off control / a fight-ender
   const conMod = abilityMod(target.ref.abilities.con);
   if (rollTotal + conMod < dc) return false; // even +CON doesn't get there
@@ -231,7 +231,7 @@ function maybeForcedEndurance(
   target.resources.set("endurance", held);
   const unleashed = target.effects.some((e) => e.name === "unleashed");
   const selfHarm = state.rng.dice(held, unleashed ? 12 : 6);
-  say(state, `${target.name} forces its endurance (+${conMod} save; Endurance ${held}, takes ${selfHarm} force)`, target.id);
+  say(state, `${target.name} spends Endurance (+${conMod} save; ${held} held, takes ${selfHarm} force)`, target.id);
   applyDamage(state, target, selfHarm, "force", { ignoreResistances: true });
   return true;
 }
@@ -276,7 +276,7 @@ export function applyDamage(
 ): number {
   if (rawAmount <= 0 || !target.alive) return 0;
 
-  // Kalinekra's Drowned interpose — a blow meant for her lands on a minion instead
+  // minionGuard — a blow meant for the summoner lands on one of its minions instead
   const guard = target.ref.specialRules.find((r) => r.rule === "minionGuard");
   if (guard && guard.rule === "minionGuard" && !target.downed) {
     const shields = [...state.units.values()].filter((u) => u.alive && u.summonerId === target.id);
@@ -327,7 +327,7 @@ export function applyDamage(
     if (resisted) dmg = Math.floor(dmg * 0.5);
     if (ref.vulnerabilities.includes(type)) dmg *= 2;
 
-    // active-effect multipliers (Amol's Etched sponge, The Seventh's Invincible Conqueror)
+    // active-effect multipliers (a "takes extra damage" debuff; a "deals extra damage" buff)
     for (const e of target.effects) {
       if (e.mods?.damageTakenMultiplier !== undefined) dmg *= e.mods.damageTakenMultiplier;
     }
@@ -351,7 +351,7 @@ export function applyDamage(
     if (src && src.side === "party" && src.zone === "melee") target.meleeHitSinceMyTurn = true;
   }
 
-  // Amol's Dissolving Strikes — a physical strike shaves the target's AC, stacking, to a floor
+  // acMeltOnHit — a physical strike shaves the target's AC, stacking, to a floor
   if (["bludgeoning", "piercing", "slashing"].includes(type) && opts.sourceId) {
     const melt = state.units.get(opts.sourceId)?.ref.specialRules.find((r) => r.rule === "acMeltOnHit");
     if (melt && melt.rule === "acMeltOnHit") {
@@ -366,7 +366,7 @@ export function applyDamage(
     }
   }
 
-  // Vari's Concussed — a thunder hit strips reactions until the target's next turn
+  // the concussed rider — a thunder hit strips reactions until the target's next turn
   if (type === "thunder" && opts.sourceId) {
     const cc = state.units.get(opts.sourceId)?.ref.specialRules.find((r) => r.rule === "noReactionsAfter");
     if (cc && cc.rule === "noReactionsAfter" && cc.damageType === "thunder" && !target.conditions.has("concussed")) {
@@ -384,7 +384,7 @@ export function applyDamage(
   if (target.hp <= 0) {
     handleDropToZero(state, target);
   } else {
-    // post-damage reactions: Bloodied Breath, Answering Peal, big-hit reactions
+    // post-damage reactions: recharge-a-breath-when-bloodied, punish-the-attacker, big-hit
     const crossedHalf = hpBefore > target.maxHp / 2 && target.hp <= target.maxHp / 2;
     reactToDamageTaken(state, {
       target, amount: dmg, crossedHalf,
@@ -419,5 +419,5 @@ function handleDropToZero(state: CombatState, target: CombatantState): void {
       state.firstPartyDownId = target.id;
     }
   }
-  reactToDrop(state, target); // Abaddon's Forced to Watch
+  reactToDrop(state, target); // "react when a creature drops" reactions
 }
