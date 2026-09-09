@@ -987,6 +987,16 @@ export interface ClassRefFeatures {
   evasion?: boolean;
   /** saving-throw proficiencies the subclass grants ("Slippery Mind" → wis) */
   extraSaves?: Ability[];
+  /** Channel Divinity — a short-rest resource plus, when recognised, an effect */
+  channelDivinity?: boolean;
+  /** Channel Divinity burst (Light's Radiance of the Dawn): area save-for-half */
+  cdBurst?: { dice: string; ability: Ability; type: DamageType; plusLevel?: boolean };
+  /** Channel Divinity heal pool (Life's Preserve Life) — total HP, split among allies */
+  cdHeal?: boolean;
+  /** a persistent summoned ally (Beastmaster Primal Companion, "your companion") */
+  companion?: boolean;
+  /** expend a Wild Shape use to summon a spirit (Wildfire / Shepherd druid, …) */
+  spiritSummon?: boolean;
   found: string[];
 }
 
@@ -1053,6 +1063,30 @@ export function parseClassRefFeatures(body: string, level: number): ClassRefFeat
     }
   }
   if (saves.length) { f.extraSaves = saves; f.found.push(`save prof: ${saves.join(", ")}`); }
+
+  // Channel Divinity + its recognised effects
+  if (/channel divinity/i.test(text)) {
+    f.channelDivinity = true;
+    // Radiance-of-the-Dawn shape: "radiant damage equal to 2d10 + your ... level"
+    const rad = /radiant damage equal to (\d+d\d+)\s*\+\s*your(?:[^.]*?)level/i.exec(text);
+    if (rad) f.cdBurst = { dice: rad[1], ability: "con", type: "radiant", plusLevel: true };
+    else {
+      // a generic "each hostile creature ... saving throw ... NdM <type> damage" CD
+      const burst = /each (?:hostile )?creature[^.]*?\b(str|dex|con|int|wis|cha)[a-z]*\s+saving throw[^.]*?(\d+d\d+)[^.]*?\b(acid|cold|fire|force|lightning|necrotic|poison|psychic|radiant|thunder)\b/i.exec(text);
+      if (burst) f.cdBurst = { dice: burst[2], ability: burst[1].slice(0, 3).toLowerCase() as Ability, type: burst[3].toLowerCase() as DamageType };
+    }
+    if (/preserve life|hit points equal to (?:five times|5\s*[×x*]\s*)(?:your )?(?:cleric )?level/i.test(text)) f.cdHeal = true;
+    f.found.push(`Channel Divinity${f.cdBurst ? " (burst)" : f.cdHeal ? " (Preserve Life)" : ""}`);
+  }
+
+  // a persistent summoned ally
+  if (/primal companion|animal companion|\bbeast companion\b|primal beast|ranger'?s companion|\byour companion\b|exceptional training/i.test(text)) {
+    f.companion = true; f.found.push("summoned companion");
+  }
+  // a Wild-Shape-fuelled spirit summon
+  if (/wildfire spirit|expend (?:a use|one use|a )?(?:of )?(?:your )?wild shape to summon|summon (?:your |the )?(?:primal |wildfire |fey )?spirit|bond of the summoned spirit/i.test(text)) {
+    f.spiritSummon = true; f.found.push("summoned spirit");
+  }
   return f;
 }
 
@@ -1192,6 +1226,69 @@ function martialPc(
   };
 }
 
+/**
+ * Bolt on subclass features the class-ref scan recognised that need real
+ * actions / resources / summons: Channel Divinity, a summoned companion, a
+ * Wild-Shape-fuelled spirit. Called on the built combatant regardless of which
+ * class path made it.
+ */
+function addSubclassFeatures(c: Combatant, key: ClassKey, level: number, cf: ClassRefFeatures): Combatant {
+  const pb = pbForLevel(level);
+  const castAb: Ability = CASTER_OF[key]?.ability ?? "wis";
+  const dc = 8 + pb + mod(c.abilities[castAb]);
+  const resources: NonNullable<Combatant["resources"]> = { ...c.resources };
+  const actions: Combatant["actions"] = [...c.actions];
+  const opener = [...c.ai.opener];
+
+  if (cf.channelDivinity) {
+    resources.channel_divinity = { max: level >= 18 ? 3 : level >= 6 ? 2 : 1, recharge: "shortRest" };
+    if (cf.cdBurst) {
+      const amt = cf.cdBurst.plusLevel ? `${cf.cdBurst.dice}+${level}` : cf.cdBurst.dice;
+      actions.push({
+        id: "channel-divinity-burst", name: "Channel Divinity: Radiant Burst",
+        cost: { action: 1 }, recharge: "none", limitedUse: { resource: "channel_divinity", amount: 1 },
+        automation: [{
+          type: "target", who: { who: "area", shape: "emanation", size: 30 },
+          effects: [{
+            type: "save", ability: cf.cdBurst.ability, dc,
+            onFail: [{ type: "damage", amount: amt, damageType: cf.cdBurst.type }],
+            onSuccess: [{ type: "damage", amount: amt, damageType: cf.cdBurst.type, half: true }],
+          }],
+        }],
+      });
+      opener.push("channel-divinity-burst");
+    } else if (cf.cdHeal) {
+      actions.push({
+        id: "channel-divinity-heal", name: "Channel Divinity: Preserve Life",
+        cost: { action: 1 }, recharge: "none", limitedUse: { resource: "channel_divinity", amount: 1 },
+        automation: [{ type: "target", who: { who: "lowestHpAlly" }, effects: [{ type: "heal", amount: String(5 * level) }] }],
+      });
+    }
+  }
+
+  if (cf.companion) {
+    actions.push({
+      id: "call-companion", name: "Call Primal Companion",
+      cost: { bonus: 1 }, recharge: "none",
+      automation: [{ type: "summon", statBlock: "primal-companion", count: "1", max: 1 }],
+      text: "summons a bonded beast (generic stand-in stats)",
+    });
+    opener.unshift("call-companion");
+  }
+  if (cf.spiritSummon) {
+    if (!resources.wild_shape) resources.wild_shape = { max: 2, recharge: "shortRest" };
+    actions.push({
+      id: "summon-spirit", name: "Summon Spirit",
+      cost: { bonus: 1 }, recharge: "none", limitedUse: { resource: "wild_shape", amount: 1 },
+      automation: [{ type: "summon", statBlock: "primal-spirit", count: "1", max: 1 }],
+      text: "expends a Wild Shape use to call a spirit ally",
+    });
+    opener.unshift("summon-spirit");
+  }
+
+  return { ...c, resources, actions, ai: { ...c.ai, opener } };
+}
+
 /** Build a Combatant that reflects this specific PC, not the nearest template. */
 export function pcNoteToCombatant(note: PcNoteInput): PcBuildResult {
   const fm = note.frontmatter ?? {};
@@ -1253,6 +1350,8 @@ export function pcNoteToCombatant(note: PcNoteInput): PcBuildResult {
   } else {
     combatant = martialPc(key, note.title, level, abilities, ac, hp, cf);
   }
+
+  combatant = addSubclassFeatures(combatant, key, level, cf);
 
   const v = validateCombatant(combatant);
   if (!v.ok) return { warnings, error: v.errors[0] };

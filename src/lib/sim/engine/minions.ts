@@ -195,11 +195,76 @@ const wolf = minion({
   ],
 });
 
+// Generic stand-ins for a PC's summoned ally (Beastmaster Primal Companion,
+// Wildfire / Shepherd spirit, Summon-X spells). Fixed mid-tier stats — good for
+// a level ~12-16 party, an abstraction otherwise.
+const primalCompanion = minion({
+  id: "primal-companion",
+  name: "Primal Companion",
+  cr: "4",
+  ac: 14,
+  maxHp: "9d10+18",
+  speeds: { walk: 40 },
+  abilities: { str: 18, dex: 15, con: 15, int: 6, wis: 13, cha: 8 },
+  pb: 3,
+  actions: [
+    {
+      id: "multiattack",
+      name: "Multiattack",
+      cost: { action: 1 },
+      recharge: "none",
+      automation: [{ type: "useAction", action: "maul", times: 2 }],
+    },
+    {
+      id: "maul",
+      name: "Maul",
+      cost: {},
+      recharge: "none",
+      automation: [
+        {
+          type: "target",
+          who: { who: "aiChoice" },
+          effects: [{ type: "attack", bonus: 7, onHit: [{ type: "damage", amount: "2d6+4", damageType: "slashing" }] }],
+        },
+      ],
+    },
+  ],
+});
+
+const primalSpirit = minion({
+  id: "primal-spirit",
+  name: "Primal Spirit",
+  cr: "3",
+  ac: 13,
+  maxHp: "6d8+12",
+  speeds: { walk: 30, fly: 30 },
+  abilities: { str: 10, dex: 14, con: 14, int: 13, wis: 15, cha: 11 },
+  pb: 3,
+  conditionImmunities: ["charmed", "frightened", "grappled", "prone", "restrained"],
+  actions: [
+    {
+      id: "flame-seed",
+      name: "Flame Seed",
+      cost: { action: 1 },
+      recharge: "none",
+      automation: [
+        {
+          type: "target",
+          who: { who: "aiChoice" },
+          effects: [{ type: "attack", bonus: 6, onHit: [{ type: "damage", amount: "2d6+3", damageType: "fire" }] }],
+        },
+      ],
+    },
+  ],
+});
+
 export const MINIONS: Record<string, Combatant> = {
   "fire-elemental": fireElemental,
   "chain-devil": chainDevil,
   zombie,
   wolf,
+  "primal-companion": primalCompanion,
+  "primal-spirit": primalSpirit,
 };
 
 /**

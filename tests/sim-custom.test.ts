@@ -419,3 +419,55 @@ Path of the Berserker. You gain Rage.`;
     expect(result.contributions.some((x) => x.name === "Bront")).toBe(true);
   });
 });
+
+describe("subclass features from a class reference", () => {
+  const pc = (cls: string, level: number, classRefBody: string, stats: Record<string, number>) =>
+    pcNoteToCombatant({ title: "Subj", frontmatter: { type: "pc", class: cls, level, ac: 18, maxHp: 100, stats }, classRefBody });
+
+  it("Channel Divinity: a Radiance-style burst becomes a real area action", () => {
+    const ref = `## Level 2 Channel Divinity
+you gain the ability to channel divine energy; finish a rest to use it again. At 6th level, twice.
+## Level 2 Channel Divinity: Radiance of the Dawn
+each hostile creature within 30 feet of you must make a Constitution saving throw. radiant damage equal to 2d10 + your cleric level on a failed save, half on a success.`;
+    const f = parseClassRefFeatures(ref, 13);
+    expect(f.channelDivinity).toBe(true);
+    expect(f.cdBurst).toMatchObject({ dice: "2d10", ability: "con", type: "radiant", plusLevel: true });
+    const c = pc("Light Domain Cleric", 13, ref, { str: 12, dex: 10, con: 16, int: 10, wis: 20, cha: 14 }).spec!.combatant;
+    expect(c.resources.channel_divinity?.max).toBe(2);
+    const burst = c.actions.find((a) => a.id === "channel-divinity-burst")!;
+    expect(burst.limitedUse?.resource).toBe("channel_divinity");
+    const save = (burst.automation[0] as { effects: { onFail: { amount: string }[] }[] }).effects[0];
+    expect(save.onFail[0].amount).toBe("2d10+13");
+  });
+
+  it("Channel Divinity: Preserve Life becomes a heal action", () => {
+    const ref = `## Level 2 Channel Divinity: Preserve Life
+As an action, restore a number of hit points equal to five times your cleric level, divided among creatures within 30 feet.`;
+    const c = pc("Life Domain Cleric", 12, ref, { str: 12, dex: 10, con: 16, int: 10, wis: 20, cha: 14 }).spec!.combatant;
+    const heal = c.actions.find((a) => a.id === "channel-divinity-heal")!;
+    expect((heal.automation[0] as { effects: { amount: string }[] }).effects[0].amount).toBe("60");
+  });
+
+  it("a Wildfire-style spirit summon costs a Wild Shape use and appears round 1", () => {
+    const ref = `## Level 2 Summon Wildfire Spirit
+As a bonus action, you can expend one use of your Wild Shape feature to summon your Wildfire Spirit.`;
+    const c = pc("Wildfire Druid", 12, ref, { str: 8, dex: 14, con: 15, int: 12, wis: 20, cha: 10 }).spec!.combatant;
+    expect(c.resources.wild_shape?.recharge).toBe("shortRest");
+    const s = c.actions.find((a) => a.id === "summon-spirit")!;
+    expect(s.limitedUse?.resource).toBe("wild_shape");
+    expect(c.ai.opener[0]).toBe("summon-spirit");
+    const { log } = runScenarioOnce({ party: [{ template: "x", level: 12, combatant: c, name: "Subj" }], enemies: ["gladiator"], seed: 3 });
+    expect(log.some((l) => /raises 1× Primal Spirit/.test(l))).toBe(true);
+  });
+
+  it("a Beastmaster companion is called round 1 and fights", () => {
+    const ref = `## Level 3 Primal Companion
+You summon a primal beast that acts on your turn. You can command it to take the Attack action.`;
+    const c = pc("Beast Master Ranger", 13, ref, { str: 12, dex: 20, con: 14, int: 10, wis: 16, cha: 10 }).spec!.combatant;
+    expect(c.actions.some((a) => a.id === "call-companion")).toBe(true);
+    const { result, log } = runScenarioOnce({ party: [{ template: "x", level: 13, combatant: c, name: "Subj" }], enemies: ["gladiator"], seed: 3 });
+    expect(log.some((l) => /raises 1× Primal Companion/.test(l))).toBe(true);
+    expect(log.some((l) => /Primal Companion 1 uses/.test(l))).toBe(true);
+    expect(["party", "monster", "draw"]).toContain(result.winner);
+  });
+});
