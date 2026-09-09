@@ -993,10 +993,16 @@ export interface ClassRefFeatures {
   cdBurst?: { dice: string; ability: Ability; type: DamageType; plusLevel?: boolean };
   /** Channel Divinity heal pool (Life's Preserve Life) — total HP, split among allies */
   cdHeal?: boolean;
-  /** a persistent summoned ally (Beastmaster Primal Companion, "your companion") */
+  /** a persistent summoned ally (Beastmaster Primal Companion, Battle Smith Steel Defender, …) */
   companion?: boolean;
-  /** expend a Wild Shape use to summon a spirit (Wildfire / Shepherd druid, …) */
+  /** a ranged/fragile summoned ally (Wildfire spirit, Eldritch Cannon, Homunculus Servant, …) */
   spiritSummon?: boolean;
+  /** the spirit summon costs a Wild Shape use */
+  spiritViaWildShape?: boolean;
+  /** Battle Smith "Battle Ready" — use INT for weapon attack + damage */
+  intWeapon?: boolean;
+  /** Artificer infusions in play — a flat +1 (→ +2 at 10th) to weapon & AC */
+  infusionBonus?: 1 | 2;
   found: string[];
 }
 
@@ -1049,8 +1055,10 @@ export function parseClassRefFeatures(body: string, level: number): ClassRefFeat
   if (/\bki\b|ki points?|martial arts|flurry of blows/i.test(text)) { f.ki = true; f.found.push("Ki / Martial Arts"); }
   if (/superiority dic|combat superiority|maneuvers?/i.test(text)) { f.superiority = true; f.found.push("Superiority Dice"); }
   if (/divine smite/i.test(text)) { f.divineSmite = true; f.found.push("Divine Smite"); }
-  // a bonus-action extra swing — Two-Weapon Fighting, Psychic Blades, Thirsting Blade, …
-  if (/(?:second|another|additional|off-hand|bonus[- ]action)[^.]{0,60}\battack\b|\battack\b[^.]{0,40}\bas a bonus action\b|two-weapon fighting/i.test(text)) {
+  // a bonus-action extra swing BY the PC — Two-Weapon Fighting, Psychic Blades,
+  // Thirsting Blade, … Reject "bonus action to command <the companion>" phrasing.
+  const baHit = /(?:second|another|additional|off-hand)\s+(?:psychic\s+|shadow\s+)?(?:blade|weapon|attack)|\battack\b[^.]{0,40}\bas a bonus action\b|\bas a bonus action\b[^.]{0,40}\b(?:make|another|attack)\b|two-weapon fighting/i.exec(text);
+  if (baHit && !/command|companion|defender|\bit\b to (?:take|make)|cannon|spirit|homunculus/i.test(text.slice(Math.max(0, baHit.index - 40), baHit.index + 80))) {
     f.bonusAttack = true; f.found.push("bonus-action attack");
   }
   if (/uncanny dodge/i.test(text)) { f.uncannyDodge = true; f.found.push("Uncanny Dodge"); }
@@ -1080,12 +1088,20 @@ export function parseClassRefFeatures(body: string, level: number): ClassRefFeat
   }
 
   // a persistent summoned ally
-  if (/primal companion|animal companion|\bbeast companion\b|primal beast|ranger'?s companion|\byour companion\b|exceptional training/i.test(text)) {
+  if (/primal companion|animal companion|\bbeast companion\b|primal beast|ranger'?s companion|\byour companion\b|exceptional training|steel defender/i.test(text)) {
     f.companion = true; f.found.push("summoned companion");
   }
-  // a Wild-Shape-fuelled spirit summon
-  if (/wildfire spirit|expend (?:a use|one use|a )?(?:of )?(?:your )?wild shape to summon|summon (?:your |the )?(?:primal |wildfire |fey )?spirit|bond of the summoned spirit/i.test(text)) {
+  // a ranged / fragile summoned ally
+  if (/wildfire spirit|eldritch cannon|homunculus servant|summon (?:your |the )?(?:primal |wildfire |fey )?spirit|bond of the summoned spirit/i.test(text)) {
     f.spiritSummon = true; f.found.push("summoned spirit");
+    if (/wild shape/i.test(text)) f.spiritViaWildShape = true;
+  }
+  // Artificer: Battle Ready (INT for weapon attacks)
+  if (/battle ready|use your intelligence modifier for (?:the )?attack/i.test(text)) { f.intWeapon = true; f.found.push("INT weapon attacks"); }
+  // Artificer: infusions (Enhanced Weapon / Defense) — a flat +1, +2 at 10th
+  if (/infuse (?:an? )?item|infuse items|enhanced (?:weapon|defense)|\+1 bonus to (?:attack|ac)|artificer infusions/i.test(text)) {
+    f.infusionBonus = /\+2\b|bonus increases to \+2|to \+2/i.test(text) ? 2 : 1;
+    f.found.push(`infusions (+${f.infusionBonus})`);
   }
   return f;
 }
@@ -1129,7 +1145,7 @@ function martialPc(
   const strMod = mod(abilities.str);
   const dexMod = mod(abilities.dex);
   const usesDex = dexMod > strMod || cls === "rogue" || cls === "monk";
-  const atkMod = usesDex ? dexMod : strMod;
+  const atkMod = cf.intWeapon ? mod(abilities.int) : usesDex ? dexMod : strMod;
   const toHit = pb + atkMod;
   const swings = Math.max(cf.extraAttack ?? 0, attackCount(cls, level));
   const monkDie = level >= 17 ? 10 : level >= 11 ? 8 : level >= 5 ? 6 : 4;
@@ -1276,17 +1292,46 @@ function addSubclassFeatures(c: Combatant, key: ClassKey, level: number, cf: Cla
     opener.unshift("call-companion");
   }
   if (cf.spiritSummon) {
-    if (!resources.wild_shape) resources.wild_shape = { max: 2, recharge: "shortRest" };
+    const viaWS = cf.spiritViaWildShape;
+    if (viaWS && !resources.wild_shape) resources.wild_shape = { max: 2, recharge: "shortRest" };
     actions.push({
-      id: "summon-spirit", name: "Summon Spirit",
-      cost: { bonus: 1 }, recharge: "none", limitedUse: { resource: "wild_shape", amount: 1 },
+      id: "summon-spirit", name: viaWS ? "Summon Spirit" : "Deploy Construct",
+      cost: { bonus: 1 }, recharge: "none",
+      ...(viaWS ? { limitedUse: { resource: "wild_shape", amount: 1 } } : {}),
       automation: [{ type: "summon", statBlock: "primal-spirit", count: "1", max: 1 }],
-      text: "expends a Wild Shape use to call a spirit ally",
+      text: viaWS ? "expends a Wild Shape use to call a spirit ally" : "fields a construct / turret (generic stand-in stats)",
     });
     opener.unshift("summon-spirit");
   }
 
   return { ...c, resources, actions, ai: { ...c.ai, opener } };
+}
+
+/** Apply an artificer infusion bonus: +N to the weapon `attack` action's to-hit
+ *  and its first damage die, and +N AC. Spells and saves are untouched. */
+function withInfusions(c: Combatant, n: 1 | 2): Combatant {
+  const actions = c.actions.map((a) => {
+    if (a.id !== "attack") return a;
+    return {
+      ...a,
+      automation: a.automation.map((node) => {
+        if (node.type !== "target") return node;
+        return {
+          ...node,
+          effects: node.effects.map((e) => {
+            if (e.type !== "attack") return e;
+            const [first, ...rest] = e.onHit;
+            const bumpedFirst =
+              first && first.type === "damage" && /^\s*\d+d\d+([+-]\d+)?\s*$/.test(first.amount)
+                ? { ...first, amount: first.amount.replace(/^\s*(\d+d\d+)([+-]\d+)?\s*$/, (_m, dice, mod) => `${dice}+${(mod ? Number(mod) : 0) + n}`) }
+                : first;
+            return { ...e, bonus: typeof e.bonus === "number" ? e.bonus + n : e.bonus, onHit: bumpedFirst ? [bumpedFirst, ...rest] : e.onHit };
+          }),
+        };
+      }),
+    };
+  });
+  return { ...c, ac: c.ac + n, actions };
 }
 
 /** Build a Combatant that reflects this specific PC, not the nearest template. */
@@ -1352,6 +1397,8 @@ export function pcNoteToCombatant(note: PcNoteInput): PcBuildResult {
   }
 
   combatant = addSubclassFeatures(combatant, key, level, cf);
+  if (cf.infusionBonus) combatant = withInfusions(combatant, cf.infusionBonus);
+  if (key === "artificer") warnings.push("artificer is a rounds-up half caster — slot counts are exact only from ~level 3 up");
 
   const v = validateCombatant(combatant);
   if (!v.ok) return { warnings, error: v.errors[0] };

@@ -471,3 +471,70 @@ You summon a primal beast that acts on your turn. You can command it to take the
     expect(["party", "monster", "draw"]).toContain(result.winner);
   });
 });
+
+describe("artificer", () => {
+  const arti = (cls: string, level: number, classRefBody?: string) =>
+    pcNoteToCombatant({
+      title: cls,
+      frontmatter: { type: "pc", class: cls, level, ac: 18, maxHp: 110, stats: { str: 10, dex: 16, con: 16, int: 20, wis: 12, cha: 8 } },
+      classRefBody,
+    });
+
+  it("a bare artificer is an INT half-caster with real spells", () => {
+    const r = arti("Artificer", 13);
+    expect(r.error).toBeUndefined();
+    const c = r.spec!.combatant;
+    expect(c.templateId).toBe("artificer");
+    expect(c.proficientSaves.sort()).toEqual(["con", "int"]);
+    expect(c.actions.filter((a) => a.isSpell && a.limitedUse?.resource.startsWith("slot")).length).toBeGreaterThan(10);
+    expect(r.warnings.join(" ")).toMatch(/rounds-up half caster/);
+  });
+
+  it("Battle Smith: Battle Ready + Steel Defender + Extra Attack", () => {
+    const ref = `## Level 3 Battle Ready
+you can use your Intelligence modifier for the attack and damage rolls of a magic weapon.
+## Level 3 Steel Defender
+a mechanical companion that acts on your turn.
+## Level 5 Extra Attack
+you can attack twice.`;
+    const f = parseClassRefFeatures(ref, 13);
+    expect(f.intWeapon).toBe(true);
+    expect(f.companion).toBe(true);
+    expect(f.extraAttack).toBe(2);
+    const c = arti("Battle Smith Artificer", 13, ref).spec!.combatant;
+    const atk = (c.actions.find((a) => a.id === "attack")!.automation[0] as { effects: { bonus: number }[] }).effects;
+    expect(atk).toHaveLength(2);
+    expect(atk[0].bonus).toBe(10); // pb 5 + INT mod 5 (Battle Ready), not DEX mod 3
+    expect(c.actions.some((a) => a.id === "call-companion")).toBe(true);
+  });
+
+  it("Artillerist: Eldritch Cannon fields a construct with no Wild Shape cost", () => {
+    const ref = `## Level 3 Eldritch Cannon
+create a magical cannon: a Flamethrower (2d8 fire) or a Force Ballista (ranged spell attack, 2d8 force).`;
+    const f = parseClassRefFeatures(ref, 13);
+    expect(f.spiritSummon).toBe(true);
+    expect(f.spiritViaWildShape).toBeUndefined();
+    const c = arti("Artillerist Artificer", 13, ref).spec!.combatant;
+    const deploy = c.actions.find((a) => a.id === "summon-spirit")!;
+    expect(deploy.limitedUse).toBeUndefined();
+    expect(c.resources.wild_shape).toBeUndefined();
+    const { log } = runScenarioOnce({ party: [{ template: "x", level: 13, combatant: c, name: "A" }], enemies: ["gladiator"], seed: 3 });
+    expect(log.some((l) => /raises 1× Primal Spirit/.test(l))).toBe(true);
+  });
+
+  it("infusions bump the weapon and AC but not spells", () => {
+    const ref = `## Level 2 Infuse Items
+Enhanced Weapon: +1 bonus to attack and damage rolls. Enhanced Defense: +1 bonus to AC.
+## Level 10 Upgrade
+The bonus increases to +2.`;
+    expect(parseClassRefFeatures(ref, 6).infusionBonus).toBe(1);
+    expect(parseClassRefFeatures(ref, 13).infusionBonus).toBe(2);
+    const c = arti("Artificer", 13, ref).spec!.combatant;
+    expect(c.ac).toBe(20); // 18 + 2
+    const eff = (c.actions.find((a) => a.id === "attack")!.automation[0] as { effects: { bonus: number; onHit: { amount?: string }[] }[] }).effects[0];
+    expect(eff.bonus).toBe(10); // pb 5 + DEX 3 + infusion 2
+    expect(eff.onHit[0].amount).toBe("1d8+5"); // 1d8+3 + infusion 2
+    // spell actions still parse (no mangled damage strings)
+    expect(c.actions.filter((a) => a.isSpell).every((a) => a.automation != null)).toBe(true);
+  });
+});
