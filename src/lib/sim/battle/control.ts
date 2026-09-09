@@ -43,6 +43,10 @@ export interface BattleDecision {
   targetId?: string;
   /** AoE action: the square to centre / aim the template at */
   aoeOrigin?: { x: number; y: number };
+  /** an optional bonus action to take as well */
+  bonusActionId?: string;
+  bonusTargetId?: string;
+  bonusAoeOrigin?: { x: number; y: number };
 }
 
 export interface AwaitAction {
@@ -72,6 +76,8 @@ export interface AwaitingInput {
   /** "x,y" anchor squares this unit can move to this turn (its current square included) */
   reachable: string[];
   actions: AwaitAction[];
+  /** bonus-action options (cost.bonus > 0) available this turn */
+  bonusActions: AwaitAction[];
   /** every living combatant + its footprint box, for the panel's range / line-of-sight maths */
   units: AwaitUnit[];
 }
@@ -102,24 +108,22 @@ export function computeAwaiting(state: BattleState, u: CombatantState): Awaiting
     if (canOccupy(ctx, x, y, fp)) reachableCells.push(key);
   }
 
-  const actions: AwaitAction[] = [];
-  for (const a of u.ref.actions) {
-    if ((a.cost.action ?? 0) <= 0) continue;
-    if (!actionAvailable(state, u, a)) continue;
+  const describe = (a: (typeof u.ref.actions)[number]): AwaitAction => {
     const areaNode = a.automation.find(isAreaNode) as Extract<AutomationNode, { type: "target" }> | undefined;
     const aoe =
-      areaNode && areaNode.who.who === "area"
-        ? { shape: areaNode.who.shape, sizeFt: areaNode.who.size }
-        : undefined;
-    const touchesEnemy = JSON.stringify(a.automation).match(/"who":"(aiChoice|nearestEnemy|lowestHpEnemy|squishiestEnemy|marked|eachEnemy|area|chosenEnemies)"/);
+      areaNode && areaNode.who.who === "area" ? { shape: areaNode.who.shape, sizeFt: areaNode.who.size } : undefined;
+    const touchesEnemy = JSON.stringify(a.automation).match(
+      /"who":"(aiChoice|nearestEnemy|lowestHpEnemy|squishiestEnemy|marked|eachEnemy|area|chosenEnemies)"/,
+    );
     const weaponRoutine = a.id === "attack" || a.id === "multiattack" || /multiattack|attack/i.test(a.name);
-    actions.push({
-      id: a.id,
-      name: a.name,
-      needsMelee: weaponRoutine && !u.ref.ai.keepDistance && !aoe,
-      friendly: !touchesEnemy,
-      aoe,
-    });
+    return { id: a.id, name: a.name, needsMelee: weaponRoutine && !u.ref.ai.keepDistance && !aoe, friendly: !touchesEnemy, aoe };
+  };
+  const actions: AwaitAction[] = [];
+  const bonusActions: AwaitAction[] = [];
+  for (const a of u.ref.actions) {
+    if (!actionAvailable(state, u, a)) continue;
+    if ((a.cost.action ?? 0) > 0) actions.push(describe(a));
+    else if ((a.cost.bonus ?? 0) > 0) bonusActions.push(describe(a));
   }
 
   const units: AwaitUnit[] = [];
@@ -143,6 +147,7 @@ export function computeAwaiting(state: BattleState, u: CombatantState): Awaiting
     reachFt: unitReachFt(u),
     reachable: reachableCells,
     actions,
+    bonusActions,
     units,
   };
 }
@@ -194,60 +199,80 @@ export function applyDecision(state: BattleState, u: CombatantState, d: BattleDe
   }
   if (!u.alive || isIncapacitated(u)) return true;
 
-  // --- action ---
-  if (!d.actionId) {
+  // run one chosen action (main or bonus) with its target / template forced
+  const runOne = (actionId: string | undefined, targetId: string | undefined, aoeOrigin: { x: number; y: number } | undefined): void => {
+    if (!actionId) return;
+    const action = u.ref.actions.find((a) => a.id === actionId);
+    if (!action || !actionAvailable(state, u, action)) return;
+
+    const meleeRoutine =
+      !u.ref.ai.keepDistance &&
+      !action.automation.some(isAreaNode) &&
+      (action.id === "attack" || action.id === "multiattack" || /multiattack|attack/i.test(action.name));
+    if (meleeRoutine && targetId) {
+      const t = state.units.get(targetId);
+      if (t && feetBetweenBoxes(boxOfUnit(state, u), boxOfUnit(state, t)) > unitReachFt(u) + 0.001) {
+        say(state, `${u.name} can't reach ${t.name} — the attack is wasted`, u.id);
+        spend(u, action);
+        markEconomy(u, action);
+        recordFrame(state, { kind: "action", actorId: u.id, text: `${u.name} — ${action.name} (out of reach)` });
+        return;
+      }
+    }
+
+    const areaNode = action.automation.find(isAreaNode) as Extract<AutomationNode, { type: "target" }> | undefined;
+    let templateCells: string[] | undefined;
+    let templateHitIds: string[] | undefined;
+    if (areaNode && areaNode.who.who === "area" && aoeOrigin) {
+      const here = posOf(state, u.id);
+      const t = aoeHits(state, here, aoeOrigin, areaNode.who.shape, areaNode.who.size);
+      templateCells = t.cells;
+      templateHitIds = t.ids;
+    }
+
+    const geo: NonNullable<RunActionOpts["geo"]> = {
+      geoTargets: (node, source) => {
+        const who = node.who.who;
+        if (who === "self" || who === "eachAlly" || who === "lowestHpAlly" || who === "chosenEnemies") return null;
+        if (who === "area" || who === "eachEnemy") {
+          if (templateHitIds && templateHitIds.length) {
+            return templateHitIds
+              .map((id) => state.units.get(id))
+              .filter((x): x is CombatantState => !!x && x.alive && x.side !== source.side);
+          }
+          return livingEnemies(state, source);
+        }
+        if (targetId) {
+          const tt = state.units.get(targetId);
+          if (tt && tt.alive && !tt.downed && tt.side !== source.side) return [tt];
+        }
+        const foes = livingEnemies(state, source);
+        const me = boxOfUnit(state, source);
+        return foes.length
+          ? [[...foes].sort((a, b) => feetBetweenBoxes(me, boxOfUnit(state, a)) - feetBetweenBoxes(me, boxOfUnit(state, b)))[0]]
+          : [];
+      },
+      attackMods: attackModsFor(state, u),
+    };
+
+    spend(u, action);
+    markEconomy(u, action);
+    runAction(state, u, action, { geo });
+    recordFrame(state, {
+      kind: "action",
+      actorId: u.id,
+      text: `${u.name} uses ${action.name}`,
+      targetIds: templateHitIds ?? (targetId ? [targetId] : undefined),
+      templateCells,
+    });
+  };
+
+  if (!d.actionId && !d.bonusActionId) {
     say(state, `${u.name} holds`, u.id);
     return true;
   }
-  const action = u.ref.actions.find((a) => a.id === d.actionId);
-  if (!action || !actionAvailable(state, u, action)) return true;
-
-  const areaNode = action.automation.find(isAreaNode) as Extract<AutomationNode, { type: "target" }> | undefined;
-  let templateCells: string[] | undefined;
-  let templateHitIds: string[] | undefined;
-  if (areaNode && areaNode.who.who === "area" && d.aoeOrigin) {
-    const here = posOf(state, u.id);
-    const t = aoeHits(state, here, d.aoeOrigin, areaNode.who.shape, areaNode.who.size);
-    templateCells = t.cells;
-    templateHitIds = t.ids;
-  }
-
-  const geo: NonNullable<RunActionOpts["geo"]> = {
-    geoTargets: (node, source) => {
-      const who = node.who.who;
-      if (who === "self" || who === "eachAlly" || who === "lowestHpAlly" || who === "chosenEnemies") return null;
-      if (who === "area" || who === "eachEnemy") {
-        if (templateHitIds && templateHitIds.length) {
-          return templateHitIds
-            .map((id) => state.units.get(id))
-            .filter((x): x is CombatantState => !!x && x.alive && x.side !== source.side);
-        }
-        return livingEnemies(state, source);
-      }
-      if (d.targetId) {
-        const tt = state.units.get(d.targetId);
-        if (tt && tt.alive && !tt.downed && tt.side !== source.side) return [tt];
-      }
-      // no valid target chosen → nearest enemy so the action still does something
-      const foes = livingEnemies(state, source);
-      const me = boxOfUnit(state, source);
-      return foes.length
-        ? [[...foes].sort((a, b) => feetBetweenBoxes(me, boxOfUnit(state, a)) - feetBetweenBoxes(me, boxOfUnit(state, b)))[0]]
-        : [];
-    },
-    attackMods: attackModsFor(state, u),
-  };
-
-  spend(u, action);
-  markEconomy(u, action);
-  runAction(state, u, action, { geo });
-  recordFrame(state, {
-    kind: "action",
-    actorId: u.id,
-    text: `${u.name} uses ${action.name}`,
-    targetIds: templateHitIds ?? (d.targetId ? [d.targetId] : undefined),
-    templateCells,
-  });
+  runOne(d.actionId, d.targetId, d.aoeOrigin);
+  if (u.alive && !isIncapacitated(u)) runOne(d.bonusActionId, d.bonusTargetId, d.bonusAoeOrigin);
   return true;
 }
 

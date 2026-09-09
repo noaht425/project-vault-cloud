@@ -245,16 +245,23 @@ export function geoTargetsFor(state: BattleState, u: CombatantState, plan: Battl
   };
 }
 
-/** the `attackMods` seam — cover only for Phase 1 (long-range disadvantage TBD) */
+/** the `attackMods` seam: cover -> +AC, and long range -> disadvantage. A ranged
+ *  attacker (keepDistance, or firing from outside its own reach) shooting past
+ *  ~120 ft is at its weapon's long range. Melee attacks never trip this — the
+ *  attacker is adjacent. */
 export function attackModsFor(state: BattleState, u: CombatantState) {
+  const LONG_RANGE_FT = 120;
   return (target: CombatantState): { acBonus?: number; disadvantage?: boolean } => {
+    const me = boxOfUnit(state, u);
+    const tb = boxOfUnit(state, target);
     const blockers: Box[] = [];
     for (const x of state.units.values()) {
       if (!x.alive || x.id === u.id || x.id === target.id) continue;
       blockers.push(boxOfUnit(state, x));
     }
-    const cover = coverBetween(state.grid, boxOfUnit(state, u), boxOfUnit(state, target), blockers);
-    return { acBonus: coverAcBonus(cover) };
+    const cover = coverBetween(state.grid, me, tb, blockers);
+    const long = feetBetweenBoxes(me, tb) > LONG_RANGE_FT;
+    return { acBonus: coverAcBonus(cover), disadvantage: long || undefined };
   };
 }
 

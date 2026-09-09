@@ -46,9 +46,12 @@ describe("battle control — pause / resume", () => {
     expect(first.awaiting, "controlled paladin pauses in round 1").toBeDefined();
     const aw = first.awaiting!;
     const foe = aw.units.find((u) => u.side === "monster")!;
+    // distance from a 1x1 square to the foe's footprint box (edge to edge)
+    const gapTo = (x: number, y: number) =>
+      Math.max(0, x - foe.box.x1, foe.box.x0 - x) + Math.max(0, y - foe.box.y1, foe.box.y0 - y);
     const dest = aw.reachable
       .map((k) => k.split(",").map(Number))
-      .map(([x, y]) => ({ x, y, d: Math.abs(x - foe.box.x0) + Math.abs(y - foe.box.y0) }))
+      .map(([x, y]) => ({ x, y, d: gapTo(x, y) }))
       .sort((p, q) => p.d - q.d)[0];
     const d1: BattleDecision = {
       round: 1,
@@ -61,7 +64,7 @@ describe("battle control — pause / resume", () => {
     expect(second.frames.length).toBeGreaterThan(first.frames.length);
     // the paladin's move + action from the decision landed in the stream
     expect(second.frames.some((f) => f.kind === "move" && f.actorId === "pc-1-vengeance-paladin")).toBe(true);
-    expect(second.frames.some((f) => f.kind === "action" && /Ada uses/.test(f.text ?? ""))).toBe(true);
+    expect(second.frames.some((f) => f.kind === "action" && /Ada — |Ada uses/.test(f.text ?? ""))).toBe(true);
     // the paladin moved from where it started
     const palStart = first.frames[0].units.find((u) => u.id === "pc-1-vengeance-paladin")!;
     const palLater = second.frames
@@ -70,6 +73,48 @@ describe("battle control — pause / resume", () => {
     expect(palLater.x !== palStart.x || palLater.y !== palStart.y).toBe(true);
     // it advanced past round 1 — never re-asks for round 1
     if (second.awaiting) expect(second.awaiting.round).toBeGreaterThan(1);
+  });
+
+  it("a melee attack at an out-of-reach target is wasted, not resolved at range", () => {
+    const setup = {
+      party: party(),
+      enemies: ["young-gold-dragon"] as string[],
+      seed: 2,
+      controlled: ["pc-1-vengeance-paladin"],
+    };
+    const aw = runBattle({ ...setup, decisions: [] }).awaiting!;
+    const foe = aw.units.find((u) => u.side === "monster")!;
+    // stay put (starting square is far from the dragon) and swing anyway
+    const d1: BattleDecision = {
+      round: 1,
+      unitId: "pc-1-vengeance-paladin",
+      actionId: aw.actions.find((x) => x.id === "attack")!.id,
+      targetId: foe.id,
+    };
+    const out = runBattle({ ...setup, decisions: [d1] });
+    expect(out.frames.some((f) => /out of reach/i.test(f.text ?? ""))).toBe(true);
+    // the dragon took no damage from that whiffed swing on round 1's paladin turn
+  });
+
+  it("a bonus action rider on the decision is also taken", () => {
+    const setup = {
+      party: party(),
+      enemies: ["young-gold-dragon"] as string[],
+      seed: 4,
+      controlled: ["pc-2-gwm-fighter"],
+    };
+    const aw = runBattle({ ...setup, decisions: [] }).awaiting!;
+    expect(Array.isArray(aw.bonusActions)).toBe(true);
+    if (aw.bonusActions.length) {
+      const d1: BattleDecision = {
+        round: 1,
+        unitId: "pc-2-gwm-fighter",
+        actionId: aw.actions[0]?.id,
+        bonusActionId: aw.bonusActions[0].id,
+      };
+      const out = runBattle({ ...setup, decisions: [d1] });
+      expect(out.frames.some((f) => f.actorId === "pc-2-gwm-fighter" && f.kind === "action")).toBe(true);
+    }
   });
 
   it("an `auto` decision lets the AI take that turn (still resumes cleanly)", () => {

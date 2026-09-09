@@ -303,8 +303,10 @@ interface Wizard {
   action: string | null;
   target: string | null;
   origin: { x: number; y: number } | null;
+  bonusAction: string | null;
+  bonusTarget: string | null;
 }
-const EMPTY_WIZ: Wizard = { move: null, action: null, target: null, origin: null };
+const EMPTY_WIZ: Wizard = { move: null, action: null, target: null, origin: null, bonusAction: null, bonusTarget: null };
 
 function BattleMap({ setup }: { setup: SimSetup }) {
   const [decisions, setDecisions] = useState<BattleDecision[]>([]);
@@ -464,18 +466,26 @@ function Replay({
         })()
       : 0;
   const outOfReach = !!awaiting && !!wiz.target && !!selAction?.needsMelee && meleeGap > awaiting.reachFt + 0.001;
-  const step: "move" | "target" | "origin" | "ready" = !awaiting
+  const bonusSel: AwaitAction | undefined = awaiting?.bonusActions.find((a) => a.id === wiz.bonusAction);
+  const bonusNeedsTarget = !!bonusSel && !bonusSel.friendly && !bonusSel.aoe;
+  const step: "move" | "target" | "origin" | "bonusTarget" | "ready" = !awaiting
     ? "ready"
     : targetsEnemy && !wiz.target
       ? "target"
       : needsOrigin && !wiz.origin
         ? "origin"
-        : "move";
+        : bonusNeedsTarget && !wiz.bonusTarget
+          ? "bonusTarget"
+          : "move";
 
   const clickCell = (x: number, y: number, u?: UnitSnap) => {
     if (!awaiting) return;
     if (step === "target") {
       if (u && u.side === "monster" && u.alive) setWiz({ ...wiz, target: u.id });
+      return;
+    }
+    if (step === "bonusTarget") {
+      if (u && u.side === "monster" && u.alive) setWiz({ ...wiz, bonusTarget: u.id });
       return;
     }
     if (step === "origin") {
@@ -495,6 +505,8 @@ function Replay({
       actionId: wiz.action ?? undefined,
       targetId: wiz.target ?? undefined,
       aoeOrigin: wiz.origin ?? undefined,
+      bonusActionId: wiz.bonusAction ?? undefined,
+      bonusTargetId: wiz.bonusTarget ?? undefined,
     });
   };
 
@@ -510,6 +522,7 @@ function Replay({
           <p className="text-xs text-muted">
             {step === "move" && "Click a highlighted square to move there (or leave it to stay put), then pick an action."}
             {step === "target" && "Click an enemy to target."}
+            {step === "bonusTarget" && "Click an enemy for the bonus action."}
             {step === "origin" && "Click a square to aim the area effect."}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -553,11 +566,36 @@ function Replay({
           {needsOrigin && (
             <div className="text-xs text-muted">Aim point: {wiz.origin ? `(${wiz.origin.x}, ${wiz.origin.y})` : "hover the map"}</div>
           )}
+          {awaiting.bonusActions.length > 0 && (
+            <div className="flex items-start gap-1.5 flex-wrap max-h-20 overflow-y-auto">
+              <span className="text-xs text-muted pt-1">Bonus:</span>
+              {awaiting.bonusActions.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setWiz({ ...wiz, bonusAction: wiz.bonusAction === a.id ? null : a.id, bonusTarget: null })}
+                  className={`text-xs px-2 py-1 rounded border ${
+                    wiz.bonusAction === a.id ? "border-accent bg-accent/10 text-normal" : "border-border text-muted hover:text-normal"
+                  }`}
+                  title={a.needsMelee ? "melee" : a.friendly ? "self / ally" : "ranged"}
+                >
+                  {a.name}
+                </button>
+              ))}
+              {wiz.bonusAction && (
+                <button className="text-xs text-muted hover:text-normal" onClick={() => setWiz({ ...wiz, bonusAction: null, bonusTarget: null })}>
+                  none
+                </button>
+              )}
+              {bonusNeedsTarget && (
+                <span className="text-xs pt-1">→ {wiz.bonusTarget ? roster.find((u) => u.id === wiz.bonusTarget)?.name ?? "" : "pick an enemy"}</span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap pt-1">
             <Button
               variant="primary"
               onClick={confirm}
-              disabled={loading || (targetsEnemy && !wiz.target) || (needsOrigin && !wiz.origin)}
+              disabled={loading || (targetsEnemy && !wiz.target) || (needsOrigin && !wiz.origin) || (bonusNeedsTarget && !wiz.bonusTarget)}
             >
               Confirm turn
             </Button>
@@ -643,11 +681,16 @@ function Replay({
                 else if (aimOrigin && aimOrigin.x === x && aimOrigin.y === y) bg = "bg-warning/50 rounded-sm";
                 else if (aoePrev.has(key)) bg = "bg-warning/30";
                 else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/25";
-                else if (step === "target" && u?.side === "monster") bg = "bg-danger/30 rounded-sm";
-                else if (wiz.target && u?.id === wiz.target) bg = "bg-danger/50 rounded-sm ring-1 ring-danger";
+                else if ((step === "target" || step === "bonusTarget") && u?.side === "monster") bg = "bg-danger/30 rounded-sm";
+                else if ((wiz.target === u?.id || wiz.bonusTarget === u?.id) && u) bg = "bg-danger/50 rounded-sm ring-1 ring-danger";
               }
               if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
               else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
+              // distance readout while placing a move
+              const distTip =
+                awaiting && step === "move" && !u
+                  ? `${roughFt(awaiting.pos.x, awaiting.pos.y, { x0: x, y0: y, x1: x, y1: y })} ft`
+                  : undefined;
               return (
                 <span
                   key={i}
@@ -656,7 +699,11 @@ function Replay({
                   onClick={awaiting ? () => clickCell(x, y, u) : undefined}
                   onMouseEnter={awaiting && step === "origin" ? () => setHoverOrigin({ x, y }) : undefined}
                   onMouseLeave={awaiting && step === "origin" ? () => setHoverOrigin(null) : undefined}
-                  title={u ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}` : undefined}
+                  title={
+                    u
+                      ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}`
+                      : distTip
+                  }
                 >
                   {ch}
                 </span>
