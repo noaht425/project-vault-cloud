@@ -250,6 +250,39 @@ const TERRAIN_LEGEND: { g: string; label: string }[] = [
   { g: "!", label: "hazard — damages anything standing in it" },
 ];
 
+/** a 10-cell block bar: "██████░░░░" */
+function hpBlocks(hp: number, max: number): { fill: string; empty: string } {
+  const frac = max > 0 ? Math.max(0, Math.min(1, hp / max)) : 0;
+  let n = Math.round(frac * 10);
+  if (hp > 0 && n === 0) n = 1;
+  return { fill: "█".repeat(n), empty: "░".repeat(10 - n) };
+}
+const SPARK = "▁▂▃▄▅▆▇█";
+function sparkline(values: number[], max: number): string {
+  if (!values.length) return "";
+  return values.map((v) => SPARK[Math.max(0, Math.min(7, Math.round((v / max) * 7)))]).join("");
+}
+
+function RosterRow({ u, actor }: { u: UnitSnap; actor: boolean }) {
+  const b = hpBlocks(u.hp, u.maxHp);
+  const dim = !u.alive ? "opacity-40 line-through" : u.downed ? "opacity-60" : "";
+  return (
+    <div className={`flex items-center gap-2 font-mono text-xs leading-tight ${dim} ${actor ? "font-bold" : ""}`}>
+      <span className="w-3 text-center">{actor ? "▸" : ""}</span>
+      <span className={`w-3 text-center ${u.side === "party" ? "text-accent" : "text-danger"}`}>{u.glyph}</span>
+      <span className="w-14 truncate">{u.name}</span>
+      <span className="tracking-tighter">
+        <span className={u.side === "party" ? "text-accent" : "text-danger"}>{b.fill}</span>
+        <span className="text-muted/30">{b.empty}</span>
+      </span>
+      <span className="tabular-nums text-muted w-14 text-right">
+        {u.downed ? "DOWN" : `${u.hp}/${u.maxHp}`}
+      </span>
+      {u.conditions.length > 0 && <span className="text-warning">[{u.conditions.join(",")}]</span>}
+    </div>
+  );
+}
+
 function TerrainLegend() {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
@@ -434,9 +467,46 @@ function Replay({
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [logLines.length]);
 
-  const roster = [...frame.units].sort((a, b) =>
-    a.side === b.side ? a.glyph.localeCompare(b.glyph) : a.side === "party" ? -1 : 1,
-  );
+  const roster = frame.units; // flat list for name lookups in the turn panel
+  // roster in initiative order, party block then a divider then monsters
+  const byId = useMemo(() => new Map(frame.units.map((u) => [u.id, u])), [frame]);
+  const initOrder = run.initiative.length ? run.initiative : frame.units.map((u) => ({ id: u.id, name: u.name, glyph: u.glyph, side: u.side }));
+  const rosterParty = initOrder.filter((i) => i.side === "party").map((i) => byId.get(i.id)).filter((u): u is UnitSnap => !!u);
+  const rosterMon = initOrder.filter((i) => i.side === "monster").map((i) => byId.get(i.id)).filter((u): u is UnitSnap => !!u);
+
+  // per-round total HP for the two sides (the play-by-play sparkline)
+  const hpCurve = useMemo(() => {
+    const rounds = new Map<number, { p: number; m: number }>();
+    for (const f of frames) {
+      let p = 0;
+      let m = 0;
+      for (const u of f.units) {
+        if (u.side === "party") p += Math.max(0, u.hp);
+        else m += Math.max(0, u.hp);
+      }
+      rounds.set(f.round, { p, m });
+    }
+    const rows = [...rounds.entries()].sort((a, b) => a[0] - b[0]);
+    const pMax = Math.max(1, ...rows.map((r) => r[1].p));
+    const mMax = Math.max(1, ...rows.map((r) => r[1].m));
+    return { rows, pMax, mMax };
+  }, [frames]);
+
+  // keyboard transport (space = play/pause, arrows = step, home/end)
+  useEffect(() => {
+    if (awaiting) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === " ") { e.preventDefault(); setPlaying((p) => (atEnd ? (setIdx(0), true) : !p)); }
+      else if (e.key === "ArrowRight") { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }
+      else if (e.key === "ArrowLeft") { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }
+      else if (e.key === "Home") { setPlaying(false); setIdx(0); }
+      else if (e.key === "End") { setPlaying(false); setIdx(last); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [awaiting, atEnd, last]);
 
   // ---- control-mode board interactions ----
   const reachSet = useMemo(() => new Set(awaiting?.reachable ?? []), [awaiting]);
@@ -644,92 +714,126 @@ function Replay({
             />
             <span className="text-xs text-muted tabular-nums whitespace-nowrap">R{frame.round} · {shownIdx + 1}/{frames.length}</span>
             <button className="text-xs text-accent hover:underline" onClick={onReplay}>replay</button>
+            <span className="text-xs text-muted/60 hidden sm:inline">space · ← → · home/end</span>
           </div>
-          <p className="text-xs text-muted min-h-4">
-            <span className="uppercase tracking-wide">{frame.kind}</span>
-            {frame.text ? ` — ${frame.text}` : ""}
-          </p>
         </>
       )}
 
-      <div className="flex gap-4 flex-wrap items-start">
+      {/* round header + initiative order */}
+      <div className="flex items-baseline gap-4 flex-wrap font-mono text-xs">
+        <span className="tracking-[0.35em] text-normal uppercase">Round {frame.round}</span>
+        <span className="text-muted truncate">
+          init: {initOrder.map((i) => i.name).join(" › ")}
+        </span>
+      </div>
+
+      {/* current event line, mockup-style */}
+      <p className="font-mono text-xs min-h-4">
+        <span className="text-muted">R{frame.round}:</span>{" "}
+        <span className="text-normal">{frame.text ?? (frame.kind === "start" ? "the battle begins" : frame.kind === "end" ? "" : "…")}</span>
+      </p>
+
+      <div className="flex gap-5 flex-wrap items-start">
         <div className="overflow-x-auto">
           <div
-            className={`inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2 ${awaiting ? "cursor-pointer" : ""}`}
-            style={{ gridTemplateColumns: `repeat(${dims.width}, 1ch)`, fontSize: "13px" }}
+            className={`inline-grid font-mono leading-none select-none text-muted/40 ${awaiting ? "cursor-pointer" : ""}`}
+            style={{ gridTemplateColumns: `2.5ch 1ch repeat(${dims.width}, 1ch) 1ch`, fontSize: "13px" }}
           >
-            {Array.from({ length: dims.width * dims.height }, (_, i) => {
-              const x = i % dims.width;
-              const y = Math.floor(i / dims.width);
-              const key = `${x},${y}`;
-              const u = unitAt.get(key);
-              const t = terrain[i] ?? ".";
-              let ch = t === "." ? "·" : t;
-              let cls = TERRAIN_CLASS[t] ?? "text-muted/25";
-              if (u) {
-                ch = u.glyph;
-                cls = u.side === "party" ? "text-accent font-semibold" : "text-danger font-semibold";
-                if (u.downed) cls = "text-muted/50";
-              } else if (pathSet.has(key)) {
-                ch = "•";
-                cls = "text-accent/40";
+            {Array.from({ length: dims.height + 2 }, (_, ry) => {
+              const y = ry - 1; // -1 = top border, H = bottom border
+              if (y < 0 || y >= dims.height) {
+                const cornerL = y < 0 ? "┌" : "└";
+                const cornerR = y < 0 ? "┐" : "┘";
+                return (
+                  <div key={ry} className="contents">
+                    <span />
+                    <span className="text-center">{cornerL}</span>
+                    <span className="text-muted/40" style={{ gridColumn: `span ${dims.width}` }}>{"─".repeat(dims.width)}</span>
+                    <span className="text-center">{cornerR}</span>
+                  </div>
+                );
               }
-              // highlights
-              let bg = "";
-              if (awaiting) {
-                if (wiz.move && wiz.move.x === x && wiz.move.y === y) bg = "bg-accent/50 rounded-sm ring-1 ring-accent";
-                else if (aimOrigin && aimOrigin.x === x && aimOrigin.y === y) bg = "bg-warning/50 rounded-sm";
-                else if (aoePrev.has(key)) bg = "bg-warning/30";
-                else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/25";
-                else if ((step === "target" || step === "bonusTarget") && u?.side === "monster") bg = "bg-danger/30 rounded-sm";
-                else if ((wiz.target === u?.id || wiz.bonusTarget === u?.id) && u) bg = "bg-danger/50 rounded-sm ring-1 ring-danger";
-              }
-              if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
-              else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
-              // distance readout while placing a move
-              const distTip =
-                awaiting && step === "move" && !u
-                  ? `${roughFt(awaiting.pos.x, awaiting.pos.y, { x0: x, y0: y, x1: x, y1: y })} ft`
-                  : undefined;
               return (
-                <span
-                  key={i}
-                  className={`text-center ${cls} ${bg}`}
-                  style={{ height: "1.15em" }}
-                  onClick={awaiting ? () => clickCell(x, y, u) : undefined}
-                  onMouseEnter={awaiting && step === "origin" ? () => setHoverOrigin({ x, y }) : undefined}
-                  onMouseLeave={awaiting && step === "origin" ? () => setHoverOrigin(null) : undefined}
-                  title={
-                    u
-                      ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}`
-                      : distTip
-                  }
-                >
-                  {ch}
-                </span>
+                <div key={ry} className="contents">
+                  <span className="text-right pr-1 tabular-nums" style={{ height: "1.15em" }}>{y + 1}</span>
+                  <span className="text-center">│</span>
+                  {Array.from({ length: dims.width }, (_, x) => {
+                    const key = `${x},${y}`;
+                    const u = unitAt.get(key);
+                    const t = terrain[y * dims.width + x] ?? ".";
+                    let ch = t === "." ? "·" : t;
+                    let cls = TERRAIN_CLASS[t] ?? "text-muted/25";
+                    if (u) {
+                      ch = u.glyph;
+                      cls = u.side === "party" ? "text-accent font-semibold" : "text-danger font-semibold";
+                      if (u.downed) cls = "text-muted/50 line-through";
+                    } else if (pathSet.has(key)) {
+                      ch = "•";
+                      cls = "text-accent/40";
+                    }
+                    let bg = "";
+                    if (awaiting) {
+                      if (wiz.move && wiz.move.x === x && wiz.move.y === y) bg = "bg-accent/50 rounded-sm ring-1 ring-accent";
+                      else if (aimOrigin && aimOrigin.x === x && aimOrigin.y === y) bg = "bg-warning/50 rounded-sm";
+                      else if (aoePrev.has(key)) bg = "bg-warning/30";
+                      else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/25";
+                      else if ((step === "target" || step === "bonusTarget") && u?.side === "monster") bg = "bg-danger/30 rounded-sm";
+                      else if ((wiz.target === u?.id || wiz.bonusTarget === u?.id) && u) bg = "bg-danger/50 rounded-sm ring-1 ring-danger";
+                    }
+                    if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
+                    else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
+                    const distTip =
+                      awaiting && step === "move" && !u
+                        ? `${roughFt(awaiting.pos.x, awaiting.pos.y, { x0: x, y0: y, x1: x, y1: y })} ft`
+                        : undefined;
+                    return (
+                      <span
+                        key={x}
+                        className={`text-center ${cls} ${bg}`}
+                        style={{ height: "1.15em" }}
+                        onClick={awaiting ? () => clickCell(x, y, u) : undefined}
+                        onMouseEnter={awaiting && step === "origin" ? () => setHoverOrigin({ x, y }) : undefined}
+                        onMouseLeave={awaiting && step === "origin" ? () => setHoverOrigin(null) : undefined}
+                        title={
+                          u
+                            ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}`
+                            : distTip
+                        }
+                      >
+                        {ch}
+                      </span>
+                    );
+                  })}
+                  <span className="text-center">│</span>
+                </div>
               );
             })}
           </div>
-          <div className="mt-1.5">
+          <div className="mt-2">
             <TerrainLegend />
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 min-w-52 flex-1">
-          <ul className="flex flex-col gap-1 text-xs">
-            {roster.map((u) => (
-              <li key={u.id} className={`flex items-center gap-2 ${!u.alive ? "opacity-40 line-through" : u.downed ? "opacity-60" : ""} ${u.isActor || u.id === awaiting?.unitId ? "font-semibold" : ""}`}>
-                <span className={`w-4 text-center font-mono ${u.side === "party" ? "text-accent" : "text-danger"}`}>{u.glyph}</span>
-                <span className="flex-1 truncate">{u.name}</span>
-                <span className="w-14 h-1.5 rounded bg-hover overflow-hidden">
-                  <span className={`block h-full ${u.side === "party" ? "bg-accent" : "bg-danger"}`} style={{ width: `${Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100))}%` }} />
-                </span>
-                <span className="tabular-nums text-muted w-14 text-right">{u.hp}/{u.maxHp}</span>
-                {u.conditions.length > 0 && <span className="text-warning">{u.conditions.join(",")}</span>}
-              </li>
+        <div className="flex flex-col gap-3 min-w-56 flex-1">
+          <div className="flex flex-col gap-0.5">
+            {rosterParty.map((u) => (
+              <RosterRow key={u.id} u={u} actor={u.isActor || u.id === awaiting?.unitId} />
             ))}
-          </ul>
-          <div ref={logRef} className="text-xs text-muted bg-panel border border-border rounded p-2 max-h-40 overflow-y-auto flex flex-col gap-0.5">
+            {rosterMon.length > 0 && <div className="text-muted/40 font-mono text-xs my-0.5">──────────────</div>}
+            {rosterMon.map((u) => (
+              <RosterRow key={u.id} u={u} actor={u.isActor || u.id === awaiting?.unitId} />
+            ))}
+          </div>
+
+          {hpCurve.rows.length > 1 && (
+            <div className="font-mono text-xs text-muted flex flex-col gap-0.5">
+              <div><span className="text-accent">party </span>{sparkline(hpCurve.rows.map((r) => r[1].p), hpCurve.pMax)}</div>
+              <div><span className="text-danger">foes  </span>{sparkline(hpCurve.rows.map((r) => r[1].m), hpCurve.mMax)}</div>
+              <div className="text-muted/50">rounds 1–{hpCurve.rows[hpCurve.rows.length - 1][0]}</div>
+            </div>
+          )}
+
+          <div ref={logRef} className="text-xs text-muted bg-panel border border-border rounded p-2 max-h-44 overflow-y-auto flex flex-col gap-0.5 font-mono">
             {logLines.map((l) => (
               <div key={l.seq}>
                 <span className="opacity-50">R{l.round}</span> {l.text}

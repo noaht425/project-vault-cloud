@@ -36,12 +36,21 @@ export interface BattleSetup {
   decisions?: BattleDecision[];
 }
 
+export interface RosterInit {
+  id: string;
+  name: string;
+  glyph: string;
+  side: "party" | "monster";
+}
+
 export interface BattleOutcome {
   frames: BattleFrame[];
   result: CombatResult;
   grid: BattleGrid;
   /** final unitId -> glyph, so the UI can label the roster */
   glyphs: Record<string, string>;
+  /** initiative order (rolled once), for the header + roster sort */
+  initiative: RosterInit[];
   /** set when the loop stopped waiting for a controlled unit's decision */
   awaiting?: AwaitingInput;
   /** true when the fight actually concluded (not paused for input) */
@@ -240,11 +249,17 @@ export function runBattle(s: BattleSetup): BattleOutcome {
 
   runBattleLoop(state);
 
+  const initiative: RosterInit[] = state.order
+    .map((id) => state.units.get(id))
+    .filter((u): u is CombatantState => !!u)
+    .map((u) => ({ id: u.id, name: u.name, glyph: glyphs.get(u.id) ?? "?", side: u.side }));
+
   return {
     frames: state.frames,
     result: summarise(state, true),
     grid,
     glyphs: Object.fromEntries(glyphs),
+    initiative,
     awaiting: state.awaiting,
     done: !state.pausedForInput,
   };

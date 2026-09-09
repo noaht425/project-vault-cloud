@@ -12,7 +12,6 @@ import {
   takeLairAction,
   takeLegendaryActions,
 } from "../engine/ai";
-import { runAction } from "../engine/interpreter";
 import { chooseFocusTarget } from "../engine/score";
 import {
   checkEnd,
@@ -30,7 +29,7 @@ import {
 } from "../engine/state";
 import { TERRAIN_GLYPH, footprint, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
-import { applyDecision, computeAwaiting } from "./control";
+import { applyDecision, computeAwaiting, runActionLogged } from "./control";
 import { BattleState, deriveZones, recordFrame } from "./state";
 
 function rollInitiative(state: BattleState): void {
@@ -146,11 +145,11 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
     if (opener) {
       spend(u, opener);
       markEconomy(u, opener);
-      runAction(state, u, opener, { geo });
+      const text = runActionLogged(state, u, opener, { geo }, `${u.name} uses ${opener.name}`);
       recordFrame(state, {
         kind: "action",
         actorId: u.id,
-        text: `${u.name} uses ${opener.name}`,
+        text,
         targetIds: plan.targetId ? [plan.targetId] : undefined,
       });
       if (opener.cost.action) return;
@@ -166,11 +165,11 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
 
   spend(u, action);
   markEconomy(u, action);
-  runAction(state, u, action, { geo });
+  const text = runActionLogged(state, u, action, { geo }, `${u.name} uses ${action.name}`);
   recordFrame(state, {
     kind: "action",
     actorId: u.id,
-    text: `${u.name} uses ${action.name}`,
+    text,
     targetIds: plan.templateHitIds ?? (plan.targetId ? [plan.targetId] : undefined),
     templateCells: plan.templateCells,
   });
@@ -259,7 +258,12 @@ export function runBattleLoop(state: BattleState): void {
       if (u.side === "party") {
         for (const m of state.units.values()) {
           if (m.side === "monster" && m.alive) {
+            const before = state.log.length;
             takeLegendaryActions(state, m);
+            const added = state.log.slice(before).map((l) => l.text).filter(Boolean);
+            if (added.length) {
+              recordFrame(state, { kind: "legendary", actorId: m.id, text: added.join("  ·  ") });
+            }
           }
         }
         checkEnd(state);

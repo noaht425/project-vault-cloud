@@ -30,6 +30,21 @@ import {
 } from "./geometry";
 import { canOccupy, pathToward, reachable, type MoveContext } from "./movement";
 
+/** run an action and return the play-by-play line(s) it produced, for the frame
+ *  text (the mockup's "Dragon breathes fire → Bront FAIL -38, …" event line). */
+export function runActionLogged(
+  state: BattleState,
+  u: CombatantState,
+  action: Parameters<typeof runAction>[2],
+  opts: RunActionOpts,
+  fallback: string,
+): string {
+  const before = state.log.length;
+  runAction(state, u, action, opts);
+  const lines = state.log.slice(before).map((l) => l.text).filter(Boolean);
+  return lines.length ? lines.join("  ·  ") : fallback;
+}
+
 export interface BattleDecision {
   round: number;
   unitId: string;
@@ -257,11 +272,11 @@ export function applyDecision(state: BattleState, u: CombatantState, d: BattleDe
 
     spend(u, action);
     markEconomy(u, action);
-    runAction(state, u, action, { geo });
+    const text = runActionLogged(state, u, action, { geo }, `${u.name} uses ${action.name}`);
     recordFrame(state, {
       kind: "action",
       actorId: u.id,
-      text: `${u.name} uses ${action.name}`,
+      text,
       targetIds: templateHitIds ?? (targetId ? [targetId] : undefined),
       templateCells,
     });

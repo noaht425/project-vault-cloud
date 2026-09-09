@@ -33,7 +33,7 @@ import {
 import { validateCombatant } from "./validate";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
-import { runBattle, battleRoster, autoPlace, defaultGridSize, type RosterEntry } from "./battle";
+import { runBattle, battleRoster, autoPlace, defaultGridSize, type RosterEntry, type RosterInit } from "./battle";
 import { gridFromDef, makeGrid, tilesToString } from "./battle/grid";
 import { coneCells, lineTemplateCells, sphereCells } from "./battle/geometry";
 import type { BattleGrid, BattleMapDef } from "./battle/grid";
@@ -53,7 +53,7 @@ import {
 } from "./engine/pc-extras";
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
-export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, AwaitingInput, AwaitAction, AwaitUnit, BattleDecision };
+export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, RosterInit, AwaitingInput, AwaitAction, AwaitUnit, BattleDecision };
 export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
@@ -252,6 +252,8 @@ export interface BattleRun {
   winner: "party" | "monster" | "draw";
   rounds: number;
   seed: number;
+  /** initiative order (rolled once) for the header + roster sort */
+  initiative: RosterInit[];
   /** set while the fight is paused for a controlled unit's decision */
   awaiting?: AwaitingInput;
   /** true once the fight has actually concluded */
@@ -322,6 +324,7 @@ export function runBattleFromSetup(
     winner: out.result.winner,
     rounds: out.result.rounds,
     seed,
+    initiative: out.initiative,
     awaiting: out.awaiting,
     done: out.done,
   };

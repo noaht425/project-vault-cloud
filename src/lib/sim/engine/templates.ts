@@ -114,7 +114,7 @@ function totemBarbarian(level: number): Combatant {
   const dmg = `2d6+${str + 3}`; // greatsword + Rage damage
   return pc({
     id: "totem-barbarian", name: `Barbarian ${level}`, level,
-    ac: 16, hp: between(level, 15, 14 * 20 + 20), // d12 + Con + Tough-ish
+    ac: 16, hp: between(level, 15, 10 * 20 + 20), // d12 + Con + Tough-ish
     abilities: { str: score(str), dex: score(2), con: score(pb === 6 ? 5 : 4), int: score(-1), wis: score(1), cha: score(0) },
     proficientSaves: ["str", "con"],
     // Danger Sense — advantage on Dex saves; Rage soak modelled as a 25% cut to all incoming
