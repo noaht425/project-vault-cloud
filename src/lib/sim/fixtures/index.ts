@@ -15,12 +15,13 @@ import {
   adultRedDragon,
   tarrasque,
 } from "./srd";
+import { SRD_EXTRA } from "./srd-extra";
 import { pcFighter15 } from "./pc-fighter-15";
 
 export { ogre, banditCaptain, gladiator, youngGoldDragon, adultRedDragon, tarrasque, pcFighter15 };
 
 /** Built-in enemy stat blocks shown in the picker before any custom import. */
-export const MONSTER_FIXTURES: Combatant[] = [...SRD_MONSTERS];
+export const MONSTER_FIXTURES: Combatant[] = [...SRD_MONSTERS, ...SRD_EXTRA];
 
 export const PC_FIXTURES: Combatant[] = [pcFighter15];
 export const ALL_FIXTURES: Combatant[] = [...MONSTER_FIXTURES, ...PC_FIXTURES];

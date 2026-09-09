@@ -287,7 +287,8 @@ describe("sim schema — Phase 0", () => {
       console.error(broken.map((r) => `${r.name}:\n  ${r.errors.join("\n  ")}`).join("\n\n"));
     }
     expect(broken).toEqual([]);
-    expect(ALL_FIXTURES.length).toBe(7);
+    // the bundled SRD bench + 1 PC
+    expect(ALL_FIXTURES.length).toBeGreaterThanOrEqual(30);
   });
 
   it("surfaces the known pending assumptions as warnings, not errors", () => {

@@ -1,6 +1,6 @@
 import type { Combatant, DamageType } from "../schema";
 
-type Automation = Combatant["actions"][number]["automation"];
+export type Automation = Combatant["actions"][number]["automation"];
 
 // ---------------------------------------------------------------------------
 // A small set of SRD 5.2.1 monsters, bundled as the simulator's built-in
@@ -16,14 +16,14 @@ type Automation = Combatant["actions"][number]["automation"];
 // fixtures/local/ (git-ignored).
 // ---------------------------------------------------------------------------
 
-type SrdBase = Pick<
+export type SrdBase = Pick<
   Combatant,
   "id" | "name" | "cr" | "ac" | "maxHp" | "abilities" | "pb" | "actions"
 > &
   Partial<Combatant>;
 
 /** Fill in the fields every combatant needs but most SRD blocks leave at defaults. */
-function srd(base: SrdBase): Combatant {
+export function srd(base: SrdBase): Combatant {
   return {
     kind: "monster",
     size: "medium",
@@ -53,7 +53,7 @@ function srd(base: SrdBase): Combatant {
 }
 
 /** one to-hit weapon attack against an AI-chosen target, optionally with a rider damage die */
-function strike(
+export function strike(
   bonus: number,
   amount: string,
   damageType: DamageType,
