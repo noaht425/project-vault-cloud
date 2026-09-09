@@ -9,6 +9,10 @@ import { CASTER_BUILDERS } from "../spells/casterTemplates";
 
 const pbFor = (lvl: number) => 2 + Math.floor((lvl - 1) / 4);
 const score = (mod: number) => 10 + mod * 2;
+/** linear interpolate a stat from its value `a` at level 1 to its value `b` at
+ *  level 20. IMPORTANT: `b` is the LEVEL-20 value, a constant — do NOT pass a
+ *  level-dependent expression (that was a long-standing HP bug that crushed
+ *  low-to-mid-level PCs to ~1/3 of their real hit points). */
 const between = (lvl: number, a: number, b: number, atA = 1, atB = 20) =>
   Math.round(a + ((b - a) * (Math.max(atA, Math.min(atB, lvl)) - atA)) / (atB - atA));
 
@@ -50,7 +54,7 @@ function gwmFighter(level: number): Combatant {
   const dmgPerHit = `2d6+${str + 6}`; // 2d6 + STR + GWF + partial GWM
   return pc({
     id: "gwm-fighter", name: `Fighter ${level}`, level,
-    ac: 19, hp: between(level, 13, 9 * level + 15),
+    ac: 19, hp: between(level, 13, 9 * 20 + 15),
     abilities: { str: score(pb === 6 ? 5 : 4), dex: score(1), con: score(3), int: score(0), wis: score(1), cha: score(0) },
     proficientSaves: ["str", "con"],
     resources: { action_surge: { max: level >= 17 ? 2 : 1, recharge: "shortRest" }, superiority: { max: 4, recharge: "shortRest" }, second_wind: { max: 1, recharge: "shortRest" } },
@@ -81,7 +85,7 @@ function assassinRogue(level: number): Combatant {
   const sneak = `${Math.ceil(level / 2)}d6`;
   return pc({
     id: "assassin-rogue", name: `Rogue ${level}`, level,
-    ac: 18, hp: between(level, 10, 7 * level + 12),
+    ac: 18, hp: between(level, 10, 7 * 20 + 12),
     abilities: { str: score(0), dex: score(pb === 6 ? 5 : 4), con: score(2), int: score(2), wis: score(2), cha: score(1) },
     proficientSaves: ["dex", "int"],
     traits: [{ id: "evasion", name: "Evasion", trigger: "always", automation: [], text: "half on a failed Dex save, none on a success (engine hook)" }],
@@ -110,7 +114,7 @@ function totemBarbarian(level: number): Combatant {
   const dmg = `2d6+${str + 3}`; // greatsword + Rage damage
   return pc({
     id: "totem-barbarian", name: `Barbarian ${level}`, level,
-    ac: 16, hp: between(level, 15, 14 * level + 20), // d12 + Con + Tough-ish
+    ac: 16, hp: between(level, 15, 14 * 20 + 20), // d12 + Con + Tough-ish
     abilities: { str: score(str), dex: score(2), con: score(pb === 6 ? 5 : 4), int: score(-1), wis: score(1), cha: score(0) },
     proficientSaves: ["str", "con"],
     // Danger Sense — advantage on Dex saves; Rage soak modelled as a 25% cut to all incoming
@@ -143,7 +147,7 @@ function openHandMonk(level: number): Combatant {
   const strikes = (level >= 5 ? 2 : 1) + 2; // attack(s) + Martial Arts + Flurry
   return pc({
     id: "open-hand-monk", name: `Monk ${level}`, level,
-    ac: 18, hp: between(level, 9, 6 * level + 12),
+    ac: 18, hp: between(level, 9, 6 * 20 + 12),
     abilities: { str: score(1), dex: score(dex), con: score(2), int: score(0), wis: score(pb === 6 ? 4 : 3), cha: score(0) },
     // Diamond Soul (14+): proficient in every save
     proficientSaves: level >= 14 ? ["str", "dex", "con", "int", "wis", "cha"] : ["str", "dex"],
