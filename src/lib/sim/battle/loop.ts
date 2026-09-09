@@ -30,6 +30,7 @@ import {
 } from "../engine/state";
 import { TERRAIN_GLYPH, footprint, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
+import { applyDecision, computeAwaiting } from "./control";
 import { BattleState, deriveZones, recordFrame } from "./state";
 
 function rollInitiative(state: BattleState): void {
@@ -117,6 +118,21 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
     }
   }
 
+  // player control: replay a recorded decision, or pause for one
+  if (state.controlled?.has(u.id)) {
+    const d = state.decisions?.find((x) => x.round === state.round && x.unitId === u.id);
+    if (!d) {
+      state.awaiting = computeAwaiting(state, u);
+      state.pausedForInput = true;
+      return;
+    }
+    if (!d.auto) {
+      applyDecision(state, u, d);
+      return;
+    }
+    // d.auto -> fall through to the AI
+  }
+
   const plan = planTurn(state, u);
   reposition(state, u, plan);
   if (!u.alive || isIncapacitated(u)) return;
@@ -188,7 +204,7 @@ export function runBattleLoop(state: BattleState): void {
     terrain: { width: state.grid.width, height: state.grid.height, tiles: terrainString(state) },
   });
 
-  while (!state.ended && state.round < state.maxRounds) {
+  while (!state.ended && !state.pausedForInput && state.round < state.maxRounds) {
     state.round++;
     for (const u of state.units.values()) {
       const precog = u.ref.specialRules.find((r) => r.rule === "d20Replacement");
@@ -232,6 +248,7 @@ export function runBattleLoop(state: BattleState): void {
       } else {
         if (u.side === "monster") u.legendaryBudget = u.legendaryMax;
         takeBattleTurn(state, u);
+        if (state.pausedForInput) return; // wait for the player before ending this turn
         recordFrame(state, { kind: "turn", actorId: u.id, text: `${u.name} ends its turn` });
       }
 
@@ -250,6 +267,8 @@ export function runBattleLoop(state: BattleState): void {
       }
     }
   }
+
+  if (state.pausedForInput) return; // stopped mid-round for player input, not over
 
   if (!state.ended) {
     state.ended = true;

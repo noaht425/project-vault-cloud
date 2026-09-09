@@ -35,8 +35,8 @@ import {
   type SweepOut,
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync } from "@/lib/sim/runner";
-import { autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
-import type { BattleMapDef, BattleRun, RosterEntry, UnitSnap } from "@/lib/sim/ui";
+import { aoePreview, autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
+import type { AwaitAction, AwaitingInput, BattleDecision, BattleMapDef, BattleRun, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -68,7 +68,7 @@ export default function SimulatorPage() {
   const [mode, setMode] = useState<Mode>("single");
   const [result, setResult] = useState<SimResult | null>(null);
   const [sweep, setSweep] = useState<SweepOut | null>(null);
-  const [battle, setBattle] = useState<BattleRun | null>(null);
+  const [battleStarted, setBattleStarted] = useState(false);
   const [sweepDim, setSweepDim] = useState<SweepDim>("level");
   const [running, setRunning] = useState(false);
   const [battleNonce, setBattleNonce] = useState(0);
@@ -94,13 +94,13 @@ export default function SimulatorPage() {
       if (mode === "single") {
         setResult(await runSimAsync(setup));
         setSweep(null);
-        setBattle(null);
       } else if (mode === "sweep") {
         setSweep(await runSweepAsync(setup, sweepDim));
         setResult(null);
-        setBattle(null);
       } else {
-        setBattle(await runBattleAsync(setup, setup.seed));
+        // Battle mode is interactive — <BattleMap> owns the run loop.
+        // A "Run battle" just (re)mounts it fresh.
+        setBattleStarted(true);
         setBattleNonce((n) => n + 1);
         setResult(null);
         setSweep(null);
@@ -109,7 +109,6 @@ export default function SimulatorPage() {
       setError(e instanceof Error ? e.message : String(e));
       setResult(null);
       setSweep(null);
-      setBattle(null);
     } finally {
       setRunning(false);
     }
@@ -197,13 +196,19 @@ export default function SimulatorPage() {
           </p>
         )}
         {mode === "battle" && (
-          <MapSetup
-            setup={setup}
-            open={editingMap}
-            onToggle={() => setEditingMap((v) => !v)}
-            onChange={(battleMap) => persist({ ...setup, battleMap })}
-            onReset={() => { persist({ ...setup, battleMap: undefined }); setEditingMap(false); }}
-          />
+          <>
+            <ControlPicker
+              setup={setup}
+              onChange={(battleControl) => persist({ ...setup, battleControl })}
+            />
+            <MapSetup
+              setup={setup}
+              open={editingMap}
+              onToggle={() => setEditingMap((v) => !v)}
+              onChange={(battleMap) => persist({ ...setup, battleMap })}
+              onReset={() => { persist({ ...setup, battleMap: undefined }); setEditingMap(false); }}
+            />
+          </>
         )}
       </section>
 
@@ -215,10 +220,11 @@ export default function SimulatorPage() {
         <Results result={result} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
       )}
       {sweep && !running && mode === "sweep" && <SweepResults out={sweep} />}
-      {battle && !running && mode === "battle" && <BattleMap key={battleNonce} run={battle} />}
-      {mode === "battle" && !battle && !running && (
+      {mode === "battle" && battleStarted && <BattleMap key={battleNonce} setup={setup} />}
+      {mode === "battle" && !battleStarted && (
         <p className="text-xs text-muted">
-          A single fight on a 5-ft grid — watch the AI move, take cover, and trade blows turn by turn. Diagonals use the PHB 5-10-5 rule.
+          A single fight on a 5-ft grid — watch the AI move, take cover, and trade blows turn by turn, or check a party
+          member above to run their turns yourself. Diagonals use the PHB 5-10-5 rule.
         </p>
       )}
     </div>
@@ -234,13 +240,144 @@ const TERRAIN_CLASS: Record<string, string> = {
   o: "text-amber-600/60 dark:text-amber-400/50",
 };
 
-function BattleMap({ run }: { run: BattleRun }) {
+function ControlPicker({ setup, onChange }: { setup: SimSetup; onChange: (ids: string[]) => void }) {
+  const party = useMemo(() => {
+    try {
+      return rosterForSetup(setup).filter((r) => r.side === "party");
+    } catch {
+      return [] as RosterEntry[];
+    }
+  }, [setup]);
+  const control = new Set(setup.battleControl ?? []);
+  const toggle = (id: string) => {
+    const next = new Set(control);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange([...next]);
+  };
+  return (
+    <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs">
+      <span className="text-muted">Control</span>
+      {party.map((r) => (
+        <label key={r.id} className="flex items-center gap-1.5">
+          <input type="checkbox" checked={control.has(r.id)} onChange={() => toggle(r.id)} />
+          <span className={control.has(r.id) ? "text-accent" : ""}>{r.name}</span>
+        </label>
+      ))}
+      {party.length > 0 && (
+        <>
+          <button className="text-accent hover:underline" onClick={() => onChange(party.map((r) => r.id))}>all</button>
+          <button className="text-muted hover:text-normal" onClick={() => onChange([])}>none</button>
+        </>
+      )}
+      {control.size > 0 && <span className="text-muted opacity-70">— you&apos;ll run these turns; the rest play themselves</span>}
+    </div>
+  );
+}
+
+interface Wizard {
+  move: { x: number; y: number } | null;
+  action: string | null;
+  target: string | null;
+  origin: { x: number; y: number } | null;
+}
+const EMPTY_WIZ: Wizard = { move: null, action: null, target: null, origin: null };
+
+function BattleMap({ setup }: { setup: SimSetup }) {
+  const [decisions, setDecisions] = useState<BattleDecision[]>([]);
+  const [run, setRun] = useState<BattleRun | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [autoAi, setAutoAi] = useState(false);
+  const [wiz, setWiz] = useState<Wizard>(EMPTY_WIZ);
+  const started = useRef(false);
+
+  const fetchRun = useCallback(
+    (ds: BattleDecision[], ai: boolean) => {
+      setLoading(true);
+      setWiz(EMPTY_WIZ);
+      const s = ai ? { ...setup, battleControl: [] as string[] } : setup;
+      runBattleAsync(s, setup.seed, ds).then((r) => {
+        setRun(r);
+        setLoading(false);
+      });
+    },
+    [setup],
+  );
+
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    fetchRun([], false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const push = (ds: BattleDecision[]) => {
+    setDecisions(ds);
+    fetchRun(ds, autoAi);
+  };
+  const commit = (d: BattleDecision) => push([...decisions, d]);
+  const undoTurn = () => push(decisions.slice(0, -1));
+  const finishWithAi = () => {
+    setAutoAi(true);
+    setDecisions(decisions);
+    fetchRun(decisions, true);
+  };
+
+  if (!run) return <p className="text-xs text-muted">Setting up the battle…</p>;
+
+  const aw = run.awaiting;
+  return (
+    <Replay
+      key={run.frames.length + (aw ? ":await" : ":done")}
+      run={run}
+      awaiting={aw}
+      loading={loading}
+      wiz={wiz}
+      setWiz={setWiz}
+      canUndo={decisions.length > 0}
+      onCommit={commit}
+      onAi={() => aw && commit({ round: aw.round, unitId: aw.unitId, auto: true })}
+      onUndo={undoTurn}
+      onFinishAi={finishWithAi}
+      onReplay={() => push([])}
+    />
+  );
+}
+
+function Replay({
+  run,
+  awaiting,
+  loading,
+  wiz,
+  setWiz,
+  canUndo,
+  onCommit,
+  onAi,
+  onUndo,
+  onFinishAi,
+  onReplay,
+}: {
+  run: BattleRun;
+  awaiting?: AwaitingInput;
+  loading: boolean;
+  wiz: Wizard;
+  setWiz: (w: Wizard) => void;
+  canUndo: boolean;
+  onCommit: (d: BattleDecision) => void;
+  onAi: () => void;
+  onUndo: () => void;
+  onFinishAi: () => void;
+  onReplay: () => void;
+}) {
   const frames = run.frames;
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(450);
   const logRef = useRef<HTMLDivElement>(null);
-  const atEnd = idx >= frames.length - 1;
+  const last = frames.length - 1;
+  const atEnd = idx >= last;
+  // while awaiting input, always show the paused (final) frame
+  const shownIdx = awaiting ? last : Math.min(idx, last);
 
   useEffect(() => {
     if (!playing || atEnd) return;
@@ -248,20 +385,10 @@ function BattleMap({ run }: { run: BattleRun }) {
     return () => clearTimeout(t);
   }, [playing, idx, speed, atEnd]);
 
-  const togglePlay = () => {
-    if (atEnd) {
-      setIdx(0);
-      setPlaying(true);
-    } else {
-      setPlaying((p) => !p);
-    }
-  };
-
-  const frame = frames[Math.min(idx, frames.length - 1)];
+  const frame = frames[shownIdx];
   const dims = frames[0].terrain!;
   const terrain = dims.tiles;
 
-  // unit occupying (x,y) in this frame
   const unitAt = useMemo(() => {
     const m = new Map<string, UnitSnap>();
     for (const u of frame.units) {
@@ -271,61 +398,180 @@ function BattleMap({ run }: { run: BattleRun }) {
     return m;
   }, [frame]);
   const templateSet = useMemo(() => new Set(frame.templateCells ?? []), [frame]);
-  const pathSet = useMemo(
-    () => new Set((frame.path ?? []).slice(0, -1).map(([x, y]) => `${x},${y}`)),
-    [frame],
-  );
+  const pathSet = useMemo(() => new Set((frame.path ?? []).slice(0, -1).map(([x, y]) => `${x},${y}`)), [frame]);
 
   const logLines = useMemo(
-    () => frames.slice(0, idx + 1).filter((f) => f.text).map((f) => ({ seq: f.seq, round: f.round, text: f.text! })),
-    [frames, idx],
+    () => frames.slice(0, shownIdx + 1).filter((f) => f.text).map((f) => ({ seq: f.seq, round: f.round, text: f.text! })),
+    [frames, shownIdx],
   );
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [logLines.length]);
 
-  const roster = [...frame.units].sort((a, b) => (a.side === b.side ? a.glyph.localeCompare(b.glyph) : a.side === "party" ? -1 : 1));
+  const roster = [...frame.units].sort((a, b) =>
+    a.side === b.side ? a.glyph.localeCompare(b.glyph) : a.side === "party" ? -1 : 1,
+  );
+
+  // ---- control-mode board interactions ----
+  const reachSet = useMemo(() => new Set(awaiting?.reachable ?? []), [awaiting]);
+  const selAction: AwaitAction | undefined = awaiting?.actions.find((a) => a.id === wiz.action);
+  const aoePrev = useMemo(() => {
+    if (!awaiting || !selAction?.aoe || !wiz.origin) return new Set<string>();
+    const from = wiz.move ?? awaiting.pos;
+    return new Set(aoePreview(selAction.aoe.shape, from, wiz.origin, selAction.aoe.sizeFt, dims));
+  }, [awaiting, selAction, wiz.origin, wiz.move, dims]);
+
+  const targetsEnemy = !!selAction && !selAction.friendly && !selAction.aoe;
+  const needsOrigin = !!selAction?.aoe;
+  const step: "move" | "target" | "origin" | "ready" = !awaiting
+    ? "ready"
+    : targetsEnemy && !wiz.target
+      ? "target"
+      : needsOrigin && !wiz.origin
+        ? "origin"
+        : "move";
+
+  const clickCell = (x: number, y: number, u?: UnitSnap) => {
+    if (!awaiting) return;
+    if (step === "target") {
+      if (u && u.side === "monster" && u.alive) setWiz({ ...wiz, target: u.id });
+      return;
+    }
+    if (step === "origin") {
+      setWiz({ ...wiz, origin: { x, y } });
+      return;
+    }
+    // move step
+    if (reachSet.has(`${x},${y}`)) setWiz({ ...wiz, move: { x, y } });
+  };
+
+  const confirm = () => {
+    if (!awaiting) return;
+    onCommit({
+      round: awaiting.round,
+      unitId: awaiting.unitId,
+      move: wiz.move ?? undefined,
+      actionId: wiz.action ?? undefined,
+      targetId: wiz.target ?? undefined,
+      aoeOrigin: wiz.origin ?? undefined,
+    });
+  };
 
   return (
     <section className="flex flex-col gap-3">
-      {/* transport */}
-      <div className="flex items-center gap-2 flex-wrap text-sm">
-        <div className="inline-flex rounded border border-border overflow-hidden">
-          <TBtn onClick={() => { setPlaying(false); setIdx(0); }} label="⏮" />
-          <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} label="◀" />
-          <TBtn onClick={togglePlay} label={playing && !atEnd ? "⏸" : "▶"} wide />
-          <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.min(frames.length - 1, i + 1)); }} label="▶▶" />
-          <TBtn onClick={() => { setPlaying(false); setIdx(frames.length - 1); }} label="⏭" />
+      {awaiting ? (
+        <div className="flex flex-col gap-2 border border-accent/40 bg-accent/5 rounded p-3 text-sm">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="font-medium text-accent">Your turn — {awaiting.unitName}</span>
+            <span className="text-xs text-muted">round {awaiting.round} · speed {awaiting.speedFt} ft</span>
+            {loading && <span className="text-xs text-muted">resolving…</span>}
+          </div>
+          <p className="text-xs text-muted">
+            {step === "move" && "Click a highlighted square to move there (or leave it to stay put), then pick an action."}
+            {step === "target" && "Click an enemy to target."}
+            {step === "origin" && "Click a square to aim the area effect."}
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted">Move:</span>
+            <span className="text-xs">{wiz.move ? `(${wiz.move.x}, ${wiz.move.y})` : "stay"}</span>
+            {wiz.move && (
+              <button className="text-xs text-muted hover:text-normal" onClick={() => setWiz({ ...wiz, move: null })}>
+                reset
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted">Action:</span>
+            {awaiting.actions.length === 0 && <span className="text-xs text-muted">— none available —</span>}
+            {awaiting.actions.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => setWiz({ ...wiz, action: wiz.action === a.id ? null : a.id, target: null, origin: null })}
+                className={`text-xs px-2 py-1 rounded border ${
+                  wiz.action === a.id ? "border-accent bg-accent/10 text-normal" : "border-border text-muted hover:text-normal"
+                }`}
+                title={a.needsMelee ? "melee" : a.friendly ? "self / ally" : a.aoe ? `${a.aoe.shape} ${a.aoe.sizeFt} ft` : "ranged"}
+              >
+                {a.name}
+              </button>
+            ))}
+            {wiz.action && (
+              <button className="text-xs text-muted hover:text-normal" onClick={() => setWiz({ ...wiz, action: null, target: null, origin: null })}>
+                skip action
+              </button>
+            )}
+          </div>
+          {targetsEnemy && (
+            <div className="text-xs text-muted">Target: {wiz.target ? roster.find((u) => u.id === wiz.target)?.name ?? wiz.target : "—"}</div>
+          )}
+          {needsOrigin && (
+            <div className="text-xs text-muted">Aim point: {wiz.origin ? `(${wiz.origin.x}, ${wiz.origin.y})` : "—"}</div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <Button
+              variant="primary"
+              onClick={confirm}
+              disabled={loading || (targetsEnemy && !wiz.target) || (needsOrigin && !wiz.origin)}
+            >
+              Confirm turn
+            </Button>
+            <button className="text-xs text-accent hover:underline" onClick={onAi} disabled={loading}>
+              let the AI take this turn
+            </button>
+            {canUndo && (
+              <button className="text-xs text-muted hover:text-normal" onClick={onUndo} disabled={loading}>
+                undo last turn
+              </button>
+            )}
+            <button className="text-xs text-muted hover:text-normal" onClick={onFinishAi} disabled={loading}>
+              finish with AI
+            </button>
+          </div>
         </div>
-        <select className="text-xs" value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
-          <option value={900}>0.5×</option>
-          <option value={450}>1×</option>
-          <option value={220}>2×</option>
-          <option value={110}>4×</option>
-        </select>
-        <input
-          type="range"
-          min={0}
-          max={frames.length - 1}
-          value={idx}
-          onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }}
-          className="flex-1 min-w-40"
-        />
-        <span className="text-xs text-muted tabular-nums whitespace-nowrap">
-          R{frame.round} · {idx + 1}/{frames.length}
-        </span>
-      </div>
-
-      <p className="text-xs text-muted min-h-4">
-        <span className="uppercase tracking-wide">{frame.kind}</span>
-        {frame.text ? ` — ${frame.text}` : ""}
-      </p>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 flex-wrap text-sm">
+            <div className="inline-flex rounded border border-border overflow-hidden">
+              <TBtn onClick={() => { setPlaying(false); setIdx(0); }} label="⏮" />
+              <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} label="◀" />
+              <TBtn
+                onClick={() => {
+                  if (atEnd) { setIdx(0); setPlaying(true); } else setPlaying((p) => !p);
+                }}
+                label={playing && !atEnd ? "⏸" : "▶"}
+                wide
+              />
+              <TBtn onClick={() => { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }} label="▶▶" />
+              <TBtn onClick={() => { setPlaying(false); setIdx(last); }} label="⏭" />
+            </div>
+            <select className="text-xs" value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
+              <option value={900}>0.5×</option>
+              <option value={450}>1×</option>
+              <option value={220}>2×</option>
+              <option value={110}>4×</option>
+            </select>
+            <input
+              type="range"
+              min={0}
+              max={last}
+              value={shownIdx}
+              onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }}
+              className="flex-1 min-w-40"
+            />
+            <span className="text-xs text-muted tabular-nums whitespace-nowrap">R{frame.round} · {shownIdx + 1}/{frames.length}</span>
+            <button className="text-xs text-accent hover:underline" onClick={onReplay}>replay</button>
+          </div>
+          <p className="text-xs text-muted min-h-4">
+            <span className="uppercase tracking-wide">{frame.kind}</span>
+            {frame.text ? ` — ${frame.text}` : ""}
+          </p>
+        </>
+      )}
 
       <div className="flex gap-4 flex-wrap items-start">
-        {/* the board */}
         <div className="overflow-x-auto">
           <div
-            className="inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2"
+            className={`inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2 ${awaiting ? "cursor-pointer" : ""}`}
             style={{ gridTemplateColumns: `repeat(${dims.width}, 1ch)`, fontSize: "13px" }}
           >
             {Array.from({ length: dims.width * dims.height }, (_, i) => {
@@ -334,26 +580,34 @@ function BattleMap({ run }: { run: BattleRun }) {
               const key = `${x},${y}`;
               const u = unitAt.get(key);
               const t = terrain[i] ?? ".";
-              const inTemplate = templateSet.has(key);
-              const onPath = pathSet.has(key);
               let ch = t === "." ? "·" : t;
               let cls = TERRAIN_CLASS[t] ?? "text-muted/25";
               if (u) {
                 ch = u.glyph;
-                cls =
-                  u.side === "party"
-                    ? "text-accent font-semibold"
-                    : "text-danger font-semibold";
+                cls = u.side === "party" ? "text-accent font-semibold" : "text-danger font-semibold";
                 if (u.downed) cls = "text-muted/50";
-              } else if (onPath) {
+              } else if (pathSet.has(key)) {
                 ch = "•";
                 cls = "text-accent/40";
               }
+              // highlights
+              let bg = "";
+              if (awaiting) {
+                if (wiz.move && wiz.move.x === x && wiz.move.y === y) bg = "bg-accent/40 rounded-sm";
+                else if (wiz.origin && wiz.origin.x === x && wiz.origin.y === y) bg = "bg-warning/50 rounded-sm";
+                else if (aoePrev.has(key)) bg = "bg-warning/25";
+                else if (step === "move" && reachSet.has(key) && !u) bg = "bg-accent/15";
+                else if (step === "target" && u?.side === "monster") bg = "bg-danger/25 rounded-sm";
+                else if (wiz.target && u?.id === wiz.target) bg = "bg-danger/40 rounded-sm";
+              }
+              if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
+              else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
               return (
                 <span
                   key={i}
-                  className={`text-center ${cls} ${u?.isActor ? "bg-accent/20 rounded-sm" : inTemplate ? "bg-warning/20" : ""}`}
+                  className={`text-center ${cls} ${bg}`}
                   style={{ height: "1.15em" }}
+                  onClick={awaiting ? () => clickCell(x, y, u) : undefined}
                   title={u ? `${u.name} — ${u.hp}/${u.maxHp}${u.conditions.length ? " [" + u.conditions.join(",") + "]" : ""}` : undefined}
                 >
                   {ch}
@@ -363,18 +617,14 @@ function BattleMap({ run }: { run: BattleRun }) {
           </div>
         </div>
 
-        {/* roster + log */}
         <div className="flex flex-col gap-3 min-w-52 flex-1">
           <ul className="flex flex-col gap-1 text-xs">
             {roster.map((u) => (
-              <li key={u.id} className={`flex items-center gap-2 ${!u.alive ? "opacity-40 line-through" : u.downed ? "opacity-60" : ""} ${u.isActor ? "font-semibold" : ""}`}>
+              <li key={u.id} className={`flex items-center gap-2 ${!u.alive ? "opacity-40 line-through" : u.downed ? "opacity-60" : ""} ${u.isActor || u.id === awaiting?.unitId ? "font-semibold" : ""}`}>
                 <span className={`w-4 text-center font-mono ${u.side === "party" ? "text-accent" : "text-danger"}`}>{u.glyph}</span>
                 <span className="flex-1 truncate">{u.name}</span>
                 <span className="w-14 h-1.5 rounded bg-hover overflow-hidden">
-                  <span
-                    className={`block h-full ${u.side === "party" ? "bg-accent" : "bg-danger"}`}
-                    style={{ width: `${Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100))}%` }}
-                  />
+                  <span className={`block h-full ${u.side === "party" ? "bg-accent" : "bg-danger"}`} style={{ width: `${Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100))}%` }} />
                 </span>
                 <span className="tabular-nums text-muted w-14 text-right">{u.hp}/{u.maxHp}</span>
                 {u.conditions.length > 0 && <span className="text-warning">{u.conditions.join(",")}</span>}

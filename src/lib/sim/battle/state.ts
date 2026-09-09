@@ -6,6 +6,7 @@ import type { CombatState, CombatantState } from "../engine/state";
 import { footprint, reachFt as sizeReachFt } from "./grid";
 import { boxOf, feetBetweenBoxes, type Box } from "./geometry";
 import type { BattleGrid } from "./grid";
+import type { AwaitingInput, BattleDecision } from "./control";
 
 export interface Pos {
   x: number;
@@ -22,6 +23,13 @@ export interface BattleState extends CombatState {
   frameSeq: number;
   /** the AI writes this just before runAction so the interpreter's geometry seam can read it */
   intent?: BattleIntent;
+  /** unit ids the player is driving; the rest stay AI */
+  controlled?: Set<string>;
+  /** recorded player choices, replayed each run */
+  decisions?: BattleDecision[];
+  /** set when the loop stopped on a controlled unit that has no decision yet */
+  awaiting?: AwaitingInput;
+  pausedForInput?: boolean;
 }
 
 export interface BattleIntent {

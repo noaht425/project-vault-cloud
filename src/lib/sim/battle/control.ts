@@ -1,0 +1,254 @@
+// Player control: the battle engine replays a list of recorded decisions and
+// pauses (does NOT end) when it reaches a controlled unit with no decision yet.
+// The UI reads `awaiting`, collects the player's move + action, appends a
+// decision, and re-runs from the seed — so it's all deterministic and "undo
+// turn" is just popping the last decision.
+
+import type { AutomationNode } from "../schema";
+import { runAction, type RunActionOpts } from "../engine/interpreter";
+import { actionAvailable, markEconomy, spend } from "../engine/ai";
+import { provokeOpportunityAttacks } from "../engine/reactions";
+import { isIncapacitated, livingEnemies, say, type CombatantState } from "../engine/state";
+import { footprint } from "./grid";
+import {
+  BattleState,
+  boxOfUnit,
+  deriveZones,
+  posOf,
+  recordFrame,
+  speedFt,
+  unitReachFt,
+} from "./state";
+import { attackModsFor } from "./ai";
+import {
+  boxOf,
+  coneCells,
+  feetBetweenBoxes,
+  lineTemplateCells,
+  sphereCells,
+  type Box,
+} from "./geometry";
+import { canOccupy, pathToward, reachable, type MoveContext } from "./movement";
+
+export interface BattleDecision {
+  round: number;
+  unitId: string;
+  /** don't pause — let the AI take this turn (still recorded so replays stay stable) */
+  auto?: boolean;
+  /** anchor square to move to (the engine paths there, applying opportunity attacks) */
+  move?: { x: number; y: number };
+  /** which action to take; omit to take no action */
+  actionId?: string;
+  /** single-target action: the unit to aim at */
+  targetId?: string;
+  /** AoE action: the square to centre / aim the template at */
+  aoeOrigin?: { x: number; y: number };
+}
+
+export interface AwaitAction {
+  id: string;
+  name: string;
+  needsMelee: boolean;
+  /** targets an ally / self rather than an enemy (heals, buffs) */
+  friendly: boolean;
+  aoe?: { shape: string; sizeFt: number };
+}
+
+export interface AwaitUnit {
+  id: string;
+  name: string;
+  side: "party" | "monster";
+  glyph: string;
+  box: Box;
+}
+
+export interface AwaitingInput {
+  unitId: string;
+  unitName: string;
+  round: number;
+  pos: { x: number; y: number };
+  speedFt: number;
+  reachFt: number;
+  /** "x,y" anchor squares this unit can move to this turn (its current square included) */
+  reachable: string[];
+  actions: AwaitAction[];
+  /** every living combatant + its footprint box, for the panel's range / line-of-sight maths */
+  units: AwaitUnit[];
+}
+
+const isAreaNode = (n: AutomationNode): n is Extract<AutomationNode, { type: "target" }> =>
+  n.type === "target" && n.who.who === "area";
+
+function occupiedByOthers(state: BattleState, selfId: string): Set<string> {
+  const s = new Set<string>();
+  for (const x of state.units.values()) {
+    if (x.id === selfId || !x.alive) continue;
+    const p = posOf(state, x.id);
+    const fp = footprint(x.ref.size);
+    for (let dy = 0; dy < fp; dy++) for (let dx = 0; dx < fp; dx++) s.add(`${p.x + dx},${p.y + dy}`);
+  }
+  return s;
+}
+
+/** what the UI needs to let the player run `u`'s turn */
+export function computeAwaiting(state: BattleState, u: CombatantState): AwaitingInput {
+  const p = posOf(state, u.id);
+  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
+  const flood = reachable(ctx, p.x, p.y, speedFt(u));
+  const fp = footprint(u.ref.size);
+  const reachableCells = [`${p.x},${p.y}`];
+  for (const key of flood.keys()) {
+    const [x, y] = key.split(",").map(Number);
+    if (canOccupy(ctx, x, y, fp)) reachableCells.push(key);
+  }
+
+  const actions: AwaitAction[] = [];
+  for (const a of u.ref.actions) {
+    if ((a.cost.action ?? 0) <= 0) continue;
+    if (!actionAvailable(state, u, a)) continue;
+    const areaNode = a.automation.find(isAreaNode) as Extract<AutomationNode, { type: "target" }> | undefined;
+    const aoe =
+      areaNode && areaNode.who.who === "area"
+        ? { shape: areaNode.who.shape, sizeFt: areaNode.who.size }
+        : undefined;
+    const touchesEnemy = JSON.stringify(a.automation).match(/"who":"(aiChoice|nearestEnemy|lowestHpEnemy|squishiestEnemy|marked|eachEnemy|area|chosenEnemies)"/);
+    const weaponRoutine = a.id === "attack" || a.id === "multiattack" || /multiattack|attack/i.test(a.name);
+    actions.push({
+      id: a.id,
+      name: a.name,
+      needsMelee: weaponRoutine && !u.ref.ai.keepDistance && !aoe,
+      friendly: !touchesEnemy,
+      aoe,
+    });
+  }
+
+  const units: AwaitUnit[] = [];
+  for (const x of state.units.values()) {
+    if (!x.alive) continue;
+    units.push({
+      id: x.id,
+      name: x.name,
+      side: x.side,
+      glyph: state.glyphs.get(x.id) ?? "?",
+      box: boxOfUnit(state, x),
+    });
+  }
+
+  return {
+    unitId: u.id,
+    unitName: u.name,
+    round: state.round,
+    pos: { x: p.x, y: p.y },
+    speedFt: speedFt(u),
+    reachFt: unitReachFt(u),
+    reachable: reachableCells,
+    actions,
+    units,
+  };
+}
+
+/** template cells + hit unit ids for a player-aimed AoE */
+function aoeHits(
+  state: BattleState,
+  from: { x: number; y: number },
+  origin: { x: number; y: number },
+  shape: string,
+  sizeFt: number,
+): { cells: string[]; ids: string[] } {
+  let cells: Set<string>;
+  if (shape === "cone") cells = coneCells(state.grid, from.x, from.y, origin.x, origin.y, sizeFt);
+  else if (shape === "line") cells = lineTemplateCells(state.grid, from.x, from.y, origin.x, origin.y, sizeFt);
+  else cells = sphereCells(state.grid, origin.x, origin.y, sizeFt);
+  const ids: string[] = [];
+  for (const x of state.units.values()) {
+    if (!x.alive || x.downed) continue;
+    const b = boxOfUnit(state, x);
+    let hit = false;
+    for (let yy = b.y0; yy <= b.y1 && !hit; yy++) for (let xx = b.x0; xx <= b.x1; xx++) if (cells.has(`${xx},${yy}`)) hit = true;
+    if (hit) ids.push(x.id);
+  }
+  return { cells: [...cells], ids };
+}
+
+/** Apply a recorded decision for `u`. Returns false when the caller should run
+ *  the AI instead (an `auto` decision). */
+export function applyDecision(state: BattleState, u: CombatantState, d: BattleDecision): boolean {
+  if (d.auto) return false;
+  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
+  const start = posOf(state, u.id);
+
+  // --- move ---
+  if (d.move && (d.move.x !== start.x || d.move.y !== start.y)) {
+    const r = pathToward(ctx, start.x, start.y, boxOf(d.move.x, d.move.y, 1), 0, speedFt(u));
+    if (r.path.length > 1) {
+      const wasMelee = u.zone === "melee";
+      if (wasMelee) {
+        provokeOpportunityAttacks(state, u);
+        if (!u.alive || isIncapacitated(u)) return true;
+      }
+      const [ex, ey] = r.path[r.path.length - 1];
+      state.pos.set(u.id, { x: ex, y: ey });
+      deriveZones(state);
+      recordFrame(state, { kind: "move", actorId: u.id, text: `${u.name} moves`, path: r.path });
+    }
+  }
+  if (!u.alive || isIncapacitated(u)) return true;
+
+  // --- action ---
+  if (!d.actionId) {
+    say(state, `${u.name} holds`, u.id);
+    return true;
+  }
+  const action = u.ref.actions.find((a) => a.id === d.actionId);
+  if (!action || !actionAvailable(state, u, action)) return true;
+
+  const areaNode = action.automation.find(isAreaNode) as Extract<AutomationNode, { type: "target" }> | undefined;
+  let templateCells: string[] | undefined;
+  let templateHitIds: string[] | undefined;
+  if (areaNode && areaNode.who.who === "area" && d.aoeOrigin) {
+    const here = posOf(state, u.id);
+    const t = aoeHits(state, here, d.aoeOrigin, areaNode.who.shape, areaNode.who.size);
+    templateCells = t.cells;
+    templateHitIds = t.ids;
+  }
+
+  const geo: NonNullable<RunActionOpts["geo"]> = {
+    geoTargets: (node, source) => {
+      const who = node.who.who;
+      if (who === "self" || who === "eachAlly" || who === "lowestHpAlly" || who === "chosenEnemies") return null;
+      if (who === "area" || who === "eachEnemy") {
+        if (templateHitIds && templateHitIds.length) {
+          return templateHitIds
+            .map((id) => state.units.get(id))
+            .filter((x): x is CombatantState => !!x && x.alive && x.side !== source.side);
+        }
+        return livingEnemies(state, source);
+      }
+      if (d.targetId) {
+        const tt = state.units.get(d.targetId);
+        if (tt && tt.alive && !tt.downed && tt.side !== source.side) return [tt];
+      }
+      // no valid target chosen → nearest enemy so the action still does something
+      const foes = livingEnemies(state, source);
+      const me = boxOfUnit(state, source);
+      return foes.length
+        ? [[...foes].sort((a, b) => feetBetweenBoxes(me, boxOfUnit(state, a)) - feetBetweenBoxes(me, boxOfUnit(state, b)))[0]]
+        : [];
+    },
+    attackMods: attackModsFor(state, u),
+  };
+
+  spend(u, action);
+  markEconomy(u, action);
+  runAction(state, u, action, { geo });
+  recordFrame(state, {
+    kind: "action",
+    actorId: u.id,
+    text: `${u.name} uses ${action.name}`,
+    targetIds: templateHitIds ?? (d.targetId ? [d.targetId] : undefined),
+    templateCells,
+  });
+  return true;
+}
+
+export { say };

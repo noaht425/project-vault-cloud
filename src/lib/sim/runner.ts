@@ -2,7 +2,7 @@
 // responsive during a long sweep); falls back to a synchronous run on the main
 // thread if workers aren't available.
 
-import { runSim, runSweep, runBattleFromSetup, type BattleRun, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
+import { runSim, runSweep, runBattleFromSetup, type BattleDecision, type BattleRun, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -33,12 +33,20 @@ function getWorker(): Worker | null {
   return worker;
 }
 
-function send<T>(kind: "sim" | "sweep" | "battle", setup: SimSetup, extra?: { dim?: SweepDim; seed?: number }): Promise<T> {
+function send<T>(
+  kind: "sim" | "sweep" | "battle",
+  setup: SimSetup,
+  extra?: { dim?: SweepDim; seed?: number; decisions?: BattleDecision[] },
+): Promise<T> {
   const w = getWorker();
   if (!w) {
     // no worker — run synchronously (may block briefly)
     const sync =
-      kind === "sim" ? runSim(setup) : kind === "sweep" ? runSweep(setup, extra!.dim!) : runBattleFromSetup(setup, { seed: extra?.seed });
+      kind === "sim"
+        ? runSim(setup)
+        : kind === "sweep"
+          ? runSweep(setup, extra!.dim!)
+          : runBattleFromSetup(setup, { seed: extra?.seed, decisions: extra?.decisions });
     return Promise.resolve(sync as unknown as T);
   }
   const id = nextId++;
@@ -49,7 +57,7 @@ function send<T>(kind: "sim" | "sweep" | "battle", setup: SimSetup, extra?: { di
         ? { id, kind, setup }
         : kind === "sweep"
           ? { id, kind, setup, dim: extra!.dim }
-          : { id, kind, setup, seed: extra?.seed };
+          : { id, kind, setup, seed: extra?.seed, decisions: extra?.decisions };
     w.postMessage(msg);
   });
 }
@@ -62,6 +70,6 @@ export function runSweepAsync(setup: SimSetup, dim: SweepDim): Promise<SweepOut>
   return send<SweepOut>("sweep", setup, { dim });
 }
 
-export function runBattleAsync(setup: SimSetup, seed?: number): Promise<BattleRun> {
-  return send<BattleRun>("battle", setup, { seed });
+export function runBattleAsync(setup: SimSetup, seed?: number, decisions?: BattleDecision[]): Promise<BattleRun> {
+  return send<BattleRun>("battle", setup, { seed, decisions });
 }

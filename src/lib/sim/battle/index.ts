@@ -8,12 +8,14 @@ import { buildParty, resolveEnemies, type PartyMemberSpec } from "../engine/scen
 import { summarise, type CombatResult } from "../engine/loop";
 import { initCombatant, type CombatantState } from "../engine/state";
 import type { Size } from "../schema";
+import type { AwaitingInput, BattleDecision } from "./control";
 import { BattleGrid, BattleMapDef, blocksMove, footprint, gridFromDef, inBounds, makeGrid, terrainAt } from "./grid";
 import { runBattleLoop } from "./loop";
 import { BattleState, type BattleFrame, type Pos } from "./state";
 
 export type { BattleFrame, BattleGrid, BattleMapDef };
 export { makeGrid, gridFromDef };
+export type { BattleDecision, AwaitingInput, AwaitAction, AwaitUnit } from "./control";
 
 export interface BattleSetup {
   party: PartyMemberSpec[];
@@ -28,6 +30,10 @@ export interface BattleSetup {
   seed?: number;
   maxRounds?: number;
   recordFrames?: boolean;
+  /** unit ids the player is driving (the rest stay AI) */
+  controlled?: string[];
+  /** recorded player choices, replayed on every run */
+  decisions?: BattleDecision[];
 }
 
 export interface BattleOutcome {
@@ -36,6 +42,10 @@ export interface BattleOutcome {
   grid: BattleGrid;
   /** final unitId -> glyph, so the UI can label the roster */
   glyphs: Record<string, string>;
+  /** set when the loop stopped waiting for a controlled unit's decision */
+  awaiting?: AwaitingInput;
+  /** true when the fight actually concluded (not paused for input) */
+  done: boolean;
 }
 
 function defaultGrid(nUnits: number): BattleGrid {
@@ -224,6 +234,8 @@ export function runBattle(s: BattleSetup): BattleOutcome {
     frames: [],
     recordFrames: s.recordFrames ?? true,
     frameSeq: 0,
+    controlled: s.controlled && s.controlled.length ? new Set(s.controlled) : undefined,
+    decisions: s.decisions ?? [],
   };
 
   runBattleLoop(state);
@@ -233,5 +245,7 @@ export function runBattle(s: BattleSetup): BattleOutcome {
     result: summarise(state, true),
     grid,
     glyphs: Object.fromEntries(glyphs),
+    awaiting: state.awaiting,
+    done: !state.pausedForInput,
   };
 }

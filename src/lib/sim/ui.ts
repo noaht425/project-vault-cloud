@@ -34,9 +34,11 @@ import { validateCombatant } from "./validate";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
 import { runBattle, battleRoster, autoPlace, defaultGridSize, type RosterEntry } from "./battle";
-import { gridFromDef, tilesToString } from "./battle/grid";
+import { gridFromDef, makeGrid, tilesToString } from "./battle/grid";
+import { coneCells, lineTemplateCells, sphereCells } from "./battle/geometry";
 import type { BattleGrid, BattleMapDef } from "./battle/grid";
 import type { BattleFrame, UnitSnap } from "./battle/state";
+import type { AwaitingInput, AwaitAction, AwaitUnit, BattleDecision } from "./battle/control";
 import {
   applyRace,
   applyFeats,
@@ -51,7 +53,7 @@ import {
 } from "./engine/pc-extras";
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
-export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry };
+export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, AwaitingInput, AwaitAction, AwaitUnit, BattleDecision };
 export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
@@ -205,6 +207,8 @@ export interface SimSetup {
   customMonsters: Combatant[];
   /** hand-built battle map (grid + terrain + starting squares) — Battle mode only */
   battleMap?: BattleMapDef;
+  /** unit ids the player drives in Battle mode; empty / undefined = full auto */
+  battleControl?: string[];
 }
 
 export interface SimResult {
@@ -248,6 +252,28 @@ export interface BattleRun {
   winner: "party" | "monster" | "draw";
   rounds: number;
   seed: number;
+  /** set while the fight is paused for a controlled unit's decision */
+  awaiting?: AwaitingInput;
+  /** true once the fight has actually concluded */
+  done: boolean;
+}
+
+/** cell keys ("x,y") an AoE template would cover, for the Battle-mode aim preview */
+export function aoePreview(
+  shape: string,
+  from: { x: number; y: number },
+  origin: { x: number; y: number },
+  sizeFt: number,
+  dims: { width: number; height: number },
+): string[] {
+  const g = makeGrid(dims.width, dims.height, "floor");
+  const set =
+    shape === "cone"
+      ? coneCells(g, from.x, from.y, origin.x, origin.y, sizeFt)
+      : shape === "line"
+        ? lineTemplateCells(g, from.x, from.y, origin.x, origin.y, sizeFt)
+        : sphereCells(g, origin.x, origin.y, sizeFt);
+  return [...set];
 }
 
 /** the id + glyph the fight will use for each combatant, without running it —
@@ -269,15 +295,36 @@ export function starterBattleMap(setup: SimSetup): BattleMapDef {
  *  Uses `setup.battleMap` (the editor's map) when present; `overrides` wins over both. */
 export function runBattleFromSetup(
   setup: SimSetup,
-  overrides: { grid?: BattleGrid; placements?: Record<string, { x: number; y: number }>; seed?: number } = {},
+  overrides: {
+    grid?: BattleGrid;
+    placements?: Record<string, { x: number; y: number }>;
+    seed?: number;
+    decisions?: BattleDecision[];
+  } = {},
 ): BattleRun {
   const enemies = enemyList(setup.enemies);
   const extraById = customById(setup.customMonsters);
   const seed = overrides.seed ?? setup.seed;
   const grid = overrides.grid ?? (setup.battleMap ? gridFromDef(setup.battleMap) : undefined);
   const placements = overrides.placements ?? setup.battleMap?.placements;
-  const out = runBattle({ party: setup.party, enemies, extraById, grid, placements, seed });
-  return { frames: out.frames, winner: out.result.winner, rounds: out.result.rounds, seed };
+  const out = runBattle({
+    party: setup.party,
+    enemies,
+    extraById,
+    grid,
+    placements,
+    seed,
+    controlled: setup.battleControl,
+    decisions: overrides.decisions,
+  });
+  return {
+    frames: out.frames,
+    winner: out.result.winner,
+    rounds: out.result.rounds,
+    seed,
+    awaiting: out.awaiting,
+    done: out.done,
+  };
 }
 
 export function defaultSetup(): SimSetup {
