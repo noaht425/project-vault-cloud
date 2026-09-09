@@ -5,6 +5,9 @@ import {
   draftToCombatant,
   emptyDraft,
   suggestedPb,
+  parseStatblock,
+  extractStatblockSection,
+  npcNoteToMonster,
 } from "../src/lib/sim/ui";
 import { runScenarioOnce, runScenario, standardParty } from "../src/lib/sim/engine/scenario";
 import { parseCombatant, type Combatant } from "../src/lib/sim/schema";
@@ -168,5 +171,149 @@ describe('"make a monster" builder', () => {
     const back = loadCustomMonsters(exportCustomMonsters([combatant!]));
     expect(back.errors).toEqual([]);
     expect(back.monsters[0].name).toBe("Round Trip");
+  });
+});
+
+describe("paste / import a statblock", () => {
+  const DRAGON_MD = `## Adult Red Dragon
+*Huge dragon, chaotic evil*
+**Armor Class** 19 (natural armor)
+**Hit Points** 256 (19d12 + 133)
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 27 (+8) | 10 (+0) | 25 (+7) | 16 (+3) | 13 (+1) | 23 (+6) |
+**Saving Throws** Dex +6, Con +13, Wis +7, Cha +11
+**Damage Immunities** fire
+**Condition Immunities** frightened
+**Challenge** 17 (18,000 XP)   **Proficiency Bonus** +6
+### Actions
+***Multiattack.*** The dragon makes three attacks: one with its bite and two with its claws.
+***Bite.*** *Melee Weapon Attack:* +14 to hit, reach 10 ft., one target. *Hit:* 19 (2d10 + 8) piercing damage plus 7 (2d6) fire damage.
+***Claw.*** *Melee Weapon Attack:* +14 to hit, reach 5 ft., one target. *Hit:* 15 (2d6 + 8) slashing damage.
+***Fire Breath (Recharge 5-6).*** The dragon exhales fire in a 60-foot cone. Each creature in that area must make a DC 21 Dexterity saving throw, taking 63 (18d6) fire damage on a failed save, or half as much damage on a successful one.
+### Legendary Actions
+The dragon can take 3 legendary actions.
+***Tail Attack.*** The dragon makes a tail attack.`;
+
+  it("reads a 2014-style markdown stat block into a valid, fightable draft", () => {
+    const { draft, error } = parseStatblock(DRAGON_MD);
+    expect(error).toBeUndefined();
+    expect(draft!.name).toBe("Adult Red Dragon");
+    expect(draft!.size).toBe("huge");
+    expect(draft!.ac).toBe(19);
+    expect(draft!.hp).toBe("19d12+133");
+    expect(draft!.abilities).toEqual({ str: 27, dex: 10, con: 25, int: 16, wis: 13, cha: 23 });
+    expect(draft!.proficientSaves.sort()).toEqual(["cha", "con", "dex", "wis"]);
+    expect(draft!.damage.fire).toBe("immune");
+    expect(draft!.conditionImmunities).toContain("frightened");
+    expect(draft!.cr).toBe("17");
+    expect(draft!.pb).toBe(6);
+    const bite = draft!.attacks.find((a) => a.name === "Bite")!;
+    expect(bite.toHit).toBe(14);
+    expect(bite.dice).toBe("2d10+8");
+    expect(bite.type).toBe("piercing");
+    expect(bite.count).toBe(1);
+    expect(draft!.attacks.find((a) => a.name === "Claw")!.count).toBe(2);
+    expect(draft!.aoe?.dc).toBe(21);
+    expect(draft!.aoe?.dice).toBe("18d6");
+    expect(draft!.aoe?.size).toBe(60);
+    expect(draft!.aoe?.recharge).toBe("roll:5-6");
+    expect(draft!.legendary).toBe(true);
+    expect(draft!.legendaryBudget).toBe(3);
+    const { combatant, error: e2 } = draftToCombatant(draft!);
+    expect(e2).toBeUndefined();
+    expect(combatant!.actions.map((a) => a.id)).toContain("multiattack");
+  });
+
+  it("reads a compact inline-ability stat block", () => {
+    const md = `**Goblin Boss**
+**Armor Class** 17 (chain shirt, shield)
+**Hit Points** 21 (6d6)
+**STR** 10 **DEX** 14 **CON** 10 **INT** 10 **WIS** 8 **CHA** 10
+**Challenge** 1 (200 XP)
+### Actions
+***Multiattack.*** The goblin boss makes two attacks with its scimitar.
+***Scimitar.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target. *Hit:* 5 (1d6 + 2) slashing damage.`;
+    const { draft, error } = parseStatblock(md);
+    expect(error).toBeUndefined();
+    expect(draft!.name).toBe("Goblin Boss");
+    expect(draft!.ac).toBe(17);
+    expect(draft!.abilities.dex).toBe(14);
+    expect(draft!.cr).toBe("1");
+    const sci = draft!.attacks.find((a) => a.name === "Scimitar")!;
+    expect(sci.toHit).toBe(4);
+    expect(sci.dice).toBe("1d6+2");
+    expect(sci.count).toBe(2);
+  });
+
+  it("reads a 5e.tools bestiary JSON entry (with its @-tags)", () => {
+    const json = JSON.stringify({
+      name: "Ogre",
+      size: ["L"],
+      type: "giant",
+      ac: [{ ac: 11, from: ["hide armor"] }],
+      hp: { average: 59, formula: "7d10 + 21" },
+      str: 19, dex: 8, con: 16, int: 5, wis: 7, cha: 7,
+      cr: "2",
+      immune: ["fire"],
+      action: [{ name: "Greatclub", entries: ["{@atk mw} {@hit 6} to hit, reach 5 ft., one target. {@h}13 ({@damage 2d8 + 4}) bludgeoning damage."] }],
+    });
+    const { draft, error } = parseStatblock(json);
+    expect(error).toBeUndefined();
+    expect(draft!.name).toBe("Ogre");
+    expect(draft!.size).toBe("large");
+    expect(draft!.ac).toBe(11);
+    expect(draft!.hp).toBe("7d10+21");
+    expect(draft!.abilities.str).toBe(19);
+    expect(draft!.damage.fire).toBe("immune");
+    const gc = draft!.attacks.find((a) => a.name === "Greatclub")!;
+    expect(gc.toHit).toBe(6);
+    expect(gc.dice).toBe("2d8+4");
+    expect(gc.type).toBe("bludgeoning");
+  });
+
+  it("extracts a '## Stat Block' section (keeping its ### sub-headings)", () => {
+    const body = `Prose about the villain.
+
+## Stat Block
+
+**Armor Class** 16
+**Hit Points** 90 (12d10 + 24)
+**STR** 18 **DEX** 12 **CON** 15 **INT** 10 **WIS** 12 **CHA** 14
+**Challenge** 6
+### Actions
+***Longsword.*** *Melee Weapon Attack:* +7 to hit, reach 5 ft. *Hit:* 8 (1d8 + 4) slashing damage.
+
+## Notes
+He hates dogs.`;
+    const section = extractStatblockSection(body)!;
+    expect(section).toContain("### Actions");
+    expect(section).not.toContain("hates dogs");
+
+    const { combatant, error } = npcNoteToMonster({ title: "Sir Villain", body });
+    expect(error).toBeUndefined();
+    expect(combatant!.name).toBe("Sir Villain");
+    expect(combatant!.ac).toBe(16);
+    expect(combatant!.actions.some((a) => a.id === "longsword")).toBe(true);
+  });
+
+  it("falls back to frontmatter + a generic attack when a note has no stat block", () => {
+    const { combatant, warnings } = npcNoteToMonster({
+      title: "Random Bandit",
+      body: "Just a guy.",
+      frontmatter: { ac: 13, maxHp: 27, cr: "1/2", stats: { str: 13, dex: 12, con: 12, int: 10, wis: 10, cha: 10 } },
+    });
+    expect(combatant!.name).toBe("Random Bandit");
+    expect(combatant!.ac).toBe(13);
+    expect(combatant!.actions.length).toBeGreaterThan(0);
+    expect(warnings.join(" ")).toMatch(/no "## Stat Block"|generic/i);
+  });
+
+  it("a parsed monster runs a fight", () => {
+    const { draft } = parseStatblock(DRAGON_MD);
+    const { combatant } = draftToCombatant(draft!);
+    const extraById = { [combatant!.id]: combatant! };
+    const { result } = runScenarioOnce({ party: standardParty(16), enemies: [combatant!.id], seed: 1, extraById });
+    expect(["party", "monster", "draw"]).toContain(result.winner);
   });
 });
