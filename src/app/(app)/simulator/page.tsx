@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import {
   classToTemplate,
   defaultSetup,
+  exportCustomMonsters,
+  loadCustomMonsters,
   loadoutSummary,
   monsterOptions,
   standardParty,
   SWEEP_DIMS,
   TEMPLATE_IDS,
+  type Combatant,
   type MonsterOption,
   type SimResult,
   type SimSetup,
@@ -29,7 +32,11 @@ function loadSetup(): SimSetup {
     if (!raw) return defaultSetup();
     const parsed = JSON.parse(raw) as SimSetup;
     if (!Array.isArray(parsed.party) || !Array.isArray(parsed.enemies)) return defaultSetup();
-    return parsed;
+    // re-parse the stored custom pack so a stale / edited entry can't break every run
+    const customMonsters = Array.isArray(parsed.customMonsters)
+      ? loadCustomMonsters(parsed.customMonsters).monsters
+      : [];
+    return { ...parsed, customMonsters };
   } catch {
     return defaultSetup();
   }
@@ -48,7 +55,7 @@ export default function SimulatorPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
-  const options = useMemo(() => monsterOptions(), []);
+  const options = useMemo(() => monsterOptions(setup.customMonsters), [setup.customMonsters]);
 
   const persist = useCallback((next: SimSetup) => {
     setSetup(next);
@@ -91,7 +98,13 @@ export default function SimulatorPage() {
         </span>
       </header>
 
-      <EnemyEditor options={options} enemies={setup.enemies} onChange={(enemies) => persist({ ...setup, enemies })} />
+      <EnemyEditor
+        options={options}
+        enemies={setup.enemies}
+        onChange={(enemies) => persist({ ...setup, enemies })}
+        customMonsters={setup.customMonsters}
+        onCustomChange={(customMonsters) => persist({ ...setup, customMonsters })}
+      />
 
       <PartyEditor party={setup.party} onChange={(party) => persist({ ...setup, party })} />
 
@@ -173,12 +186,18 @@ function EnemyEditor({
   options,
   enemies,
   onChange,
+  customMonsters,
+  onCustomChange,
 }: {
   options: MonsterOption[];
   enemies: SimSetup["enemies"];
   onChange: (e: SimSetup["enemies"]) => void;
+  customMonsters: Combatant[];
+  onCustomChange: (c: Combatant[]) => void;
 }) {
   const [pick, setPick] = useState("");
+  const [customMsg, setCustomMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const byId = useMemo(() => Object.fromEntries(options.map((o) => [o.id, o])), [options]);
 
   const add = () => {
@@ -187,9 +206,69 @@ function EnemyEditor({
     setPick("");
   };
 
+  const onFile = async (file: File) => {
+    setCustomMsg(null);
+    const text = await file.text();
+    const { monsters, errors } = loadCustomMonsters(text);
+    if (monsters.length) {
+      // merge: new ids win, existing custom entries kept
+      const merged = [...customMonsters.filter((m) => !monsters.some((n) => n.id === m.id)), ...monsters];
+      onCustomChange(merged);
+    }
+    const parts = [
+      monsters.length ? `Loaded ${monsters.length} stat block${monsters.length === 1 ? "" : "s"}` : "Nothing loaded",
+      errors.length ? `${errors.length} skipped: ${errors.slice(0, 2).join("; ")}${errors.length > 2 ? " …" : ""}` : "",
+    ].filter(Boolean);
+    setCustomMsg(parts.join(" · "));
+  };
+
+  const exportPack = () => {
+    const blob = new Blob([exportCustomMonsters(customMonsters)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "custom-monsters.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-muted uppercase tracking-wide">Enemies</h2>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h2 className="text-sm font-medium text-muted uppercase tracking-wide">Enemies</h2>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onFile(f);
+            e.target.value = "";
+          }}
+        />
+        <button className="text-xs text-accent hover:underline" onClick={() => fileRef.current?.click()}>
+          load monsters (JSON)
+        </button>
+        {customMonsters.length > 0 && (
+          <>
+            <span className="text-xs text-muted">{customMonsters.length} custom loaded</span>
+            <button className="text-xs text-accent hover:underline" onClick={exportPack}>
+              export
+            </button>
+            <button
+              className="text-xs text-muted hover:text-danger"
+              onClick={() => {
+                onCustomChange([]);
+                setCustomMsg(null);
+              }}
+            >
+              clear
+            </button>
+          </>
+        )}
+      </div>
+      {customMsg && <p className="text-xs text-muted">{customMsg}</p>}
       <div className="flex gap-2 flex-wrap">
         <select value={pick} onChange={(e) => setPick(e.target.value)} className="min-w-52">
           <option value="">Add a monster…</option>

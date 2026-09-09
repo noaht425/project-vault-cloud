@@ -41,6 +41,8 @@ export interface ScenarioInput {
   trials?: number;
   seed?: number;
   maxRounds?: number;
+  /** extra stat blocks (custom-loaded packs) resolvable as enemy ids and by `summon` nodes */
+  extraById?: Record<string, Combatant>;
 }
 
 /**
@@ -48,13 +50,13 @@ export interface ScenarioInput {
  * id, optionally with a count: "chain-devil x3", "fungal-thrall x4". Repeats get
  * unique ids / names so the engine and the log can tell them apart.
  */
-function resolveEnemies(ids: string[]): Combatant[] {
+function resolveEnemies(ids: string[], extraById?: Record<string, Combatant>): Combatant[] {
   const out: Combatant[] = [];
   for (const raw of ids) {
     const m = /^(.+?)\s*[x*]\s*(\d+)$/.exec(raw.trim());
     const id = (m ? m[1] : raw).trim();
     const count = m ? Math.max(1, Number(m[2])) : 1;
-    const base = FIXTURES_BY_ID[id] ?? MINIONS[id];
+    const base = extraById?.[id] ?? FIXTURES_BY_ID[id] ?? MINIONS[id];
     if (!base) throw new Error(`unknown monster "${id}"`);
     for (let i = 0; i < count; i++) {
       out.push(count > 1 ? { ...base, id: `${base.id}-${i + 1}`, name: `${base.name} ${i + 1}` } : base);
@@ -66,8 +68,8 @@ function resolveEnemies(ids: string[]): Combatant[] {
 /** One narrated fight. */
 export function runScenarioOnce(s: ScenarioInput): { result: CombatResult; log: string[] } {
   const party = buildParty(s.party);
-  const state = runCombat(resolveEnemies(s.enemies), {
-    seed: s.seed ?? 1, maxRounds: s.maxRounds, party, keepLog: true,
+  const state = runCombat(resolveEnemies(s.enemies, s.extraById), {
+    seed: s.seed ?? 1, maxRounds: s.maxRounds, party, keepLog: true, summonRegistry: s.extraById,
   });
   const r = summarise(state, true);
   return { result: r, log: r.log };
@@ -77,9 +79,9 @@ export function runScenarioOnce(s: ScenarioInput): { result: CombatResult; log: 
 export function runScenario(s: ScenarioInput): MonteCarloResult {
   const party = buildParty(s.party);
   const opts: RunOptions & { trials?: number } = {
-    seed: s.seed ?? 1, trials: s.trials ?? 400, maxRounds: s.maxRounds, party,
+    seed: s.seed ?? 1, trials: s.trials ?? 400, maxRounds: s.maxRounds, party, summonRegistry: s.extraById,
   };
-  return monteCarlo(resolveEnemies(s.enemies), opts);
+  return monteCarlo(resolveEnemies(s.enemies, s.extraById), opts);
 }
 
 /** Convenience: same 4 templates at one level. */
@@ -101,7 +103,7 @@ export function scenarioSweep(
   values: number[],
 ): SweepResult {
   const party = buildParty(s.party);
-  return sweep(resolveEnemies(s.enemies), { seed: s.seed ?? 1, trials: s.trials ?? 300, party }, dimension, values);
+  return sweep(resolveEnemies(s.enemies, s.extraById), { seed: s.seed ?? 1, trials: s.trials ?? 300, party, summonRegistry: s.extraById }, dimension, values);
 }
 
 export interface LadderRow {

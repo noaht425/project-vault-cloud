@@ -101,6 +101,8 @@ export interface CombatState {
   monsterFocusId?: string;
   /** monotonic counter for unique spawned-minion ids */
   summonCounter: number;
+  /** extra stat blocks a `summon` node can name — custom-loaded monster packs */
+  summonRegistry?: Record<string, Combatant>;
   /** set while a reaction is resolving, so reactions don't trigger reactions */
   inReaction?: boolean;
   /** what-if knobs for this run */

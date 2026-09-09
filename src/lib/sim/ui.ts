@@ -14,10 +14,11 @@ import {
   standardParty,
   type PartyMemberSpec,
 } from "./engine/scenario";
+import { parseCombatant, type Combatant } from "./schema";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
 
-export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout };
+export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant };
 export { standardParty, TEMPLATE_IDS };
 
 /** map a PC note's class string to the nearest sim template */
@@ -58,18 +59,30 @@ export interface MonsterOption {
 
 // "Boss" vs "monster" is just a picker grouping: a block with legendary actions
 // is a boss (a solo encounter centrepiece), everything else is a standalone
-// monster. Custom-loaded blocks follow the same rule.
+// monster. Custom-loaded blocks follow the same rule and get a "· custom" tag.
 const byCrThenName = (a: MonsterOption, b: MonsterOption): number =>
   (Number(a.cr) || 0) - (Number(b.cr) || 0) || a.name.localeCompare(b.name);
 
-/** everything you can drop into the enemy list: bosses, then standalone monsters, then the minion pool */
-export function monsterOptions(): MonsterOption[] {
-  const fixtures = MONSTER_FIXTURES.map((m) => ({
+function toOption(m: Combatant, custom: boolean): MonsterOption {
+  return {
     id: m.id,
-    name: m.name,
+    name: custom ? `${m.name} · custom` : m.name,
     cr: m.cr ?? "?",
-    kind: (m.legendaryActions ? "boss" : "monster") as "boss" | "monster",
-  }));
+    kind: m.legendaryActions ? "boss" : "monster",
+  };
+}
+
+/**
+ * Everything you can drop into the enemy list: bosses, then standalone monsters,
+ * then the minion pool. `custom` is the loaded-from-JSON pack (see
+ * loadCustomMonsters); its entries slot into the boss / monster groups by the
+ * same legendary-actions rule.
+ */
+export function monsterOptions(custom: Combatant[] = []): MonsterOption[] {
+  const fixtures = [
+    ...MONSTER_FIXTURES.map((m) => toOption(m, false)),
+    ...custom.map((m) => toOption(m, true)),
+  ];
   const bosses = fixtures.filter((m) => m.kind === "boss").sort(byCrThenName);
   const monsters = fixtures.filter((m) => m.kind === "monster").sort(byCrThenName);
   const minions = Object.values(MINIONS).map((m) => ({
@@ -81,9 +94,67 @@ export function monsterOptions(): MonsterOption[] {
   return [...bosses, ...monsters, ...minions];
 }
 
-const CR_BY_ID: Record<string, string> = Object.fromEntries(
+const BUNDLED_CR_BY_ID: Record<string, string> = Object.fromEntries(
   monsterOptions().map((m) => [m.id, m.cr]),
 );
+
+/** id → Combatant for a loaded custom pack, for enemy resolution and `summon`. */
+function customById(list: Combatant[]): Record<string, Combatant> {
+  return Object.fromEntries(list.map((m) => [m.id, m]));
+}
+
+// --------------------------------------------------------- custom monster I/O
+
+export interface CustomLoadResult {
+  monsters: Combatant[];
+  errors: string[];
+}
+
+/**
+ * Parse a user-supplied JSON blob into `Combatant`s. Accepts a bare array, a
+ * `{ monsters: [...] }` object, or the extract shape `{ monsters, minions }`.
+ * Bad entries are skipped and reported, not thrown.
+ */
+export function loadCustomMonsters(json: unknown): CustomLoadResult {
+  let raw: unknown;
+  try {
+    raw = typeof json === "string" ? JSON.parse(json) : json;
+  } catch (e) {
+    return { monsters: [], errors: [`not valid JSON: ${e instanceof Error ? e.message : String(e)}`] };
+  }
+  const asObj = raw as { monsters?: unknown; minions?: unknown };
+  const entries: unknown[] = Array.isArray(raw)
+    ? raw
+    : [
+        ...(Array.isArray(asObj?.monsters) ? asObj.monsters : []),
+        ...(Array.isArray(asObj?.minions) ? asObj.minions : []),
+      ];
+  if (!entries.length) return { monsters: [], errors: ["no monsters found — expected an array or { monsters: [...] }"] };
+
+  const monsters: Combatant[] = [];
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < entries.length; i++) {
+    try {
+      const c = parseCombatant(entries[i]);
+      if (seen.has(c.id)) {
+        errors.push(`entry ${i + 1} ("${c.name}"): duplicate id "${c.id}" — skipped`);
+        continue;
+      }
+      seen.add(c.id);
+      monsters.push(c);
+    } catch (e) {
+      const name = (entries[i] as { name?: string })?.name ?? `#${i + 1}`;
+      errors.push(`entry "${name}": ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+    }
+  }
+  return { monsters, errors };
+}
+
+/** Serialise a custom pack back to a JSON string for download. */
+export function exportCustomMonsters(list: Combatant[]): string {
+  return JSON.stringify({ monsters: list }, null, 2) + "\n";
+}
 
 export interface EnemyEntry {
   id: string;
@@ -95,6 +166,8 @@ export interface SimSetup {
   enemies: EnemyEntry[];
   trials: number;
   seed: number;
+  /** stat blocks loaded from a user JSON file (see loadCustomMonsters) */
+  customMonsters: Combatant[];
 }
 
 export interface SimResult {
@@ -109,13 +182,20 @@ function enemyList(enemies: EnemyEntry[]): string[] {
   return enemies.filter((e) => e.id).map((e) => (e.count > 1 ? `${e.id} x${e.count}` : e.id));
 }
 
+const crById = (setup: SimSetup): Record<string, string> => ({
+  ...BUNDLED_CR_BY_ID,
+  ...Object.fromEntries(setup.customMonsters.map((m) => [m.id, m.cr ?? "0"])),
+});
+
 /** Run the whole thing: Monte-Carlo distribution + one narrated fight + XP budget. */
 export function runSim(setup: SimSetup): SimResult {
   const enemies = enemyList(setup.enemies);
-  const mc = runScenario({ party: setup.party, enemies, trials: setup.trials, seed: setup.seed });
-  const sample = runScenarioOnce({ party: setup.party, enemies, seed: setup.seed });
+  const extraById = customById(setup.customMonsters);
+  const mc = runScenario({ party: setup.party, enemies, trials: setup.trials, seed: setup.seed, extraById });
+  const sample = runScenarioOnce({ party: setup.party, enemies, seed: setup.seed, extraById });
 
-  const crs = setup.enemies.flatMap((e) => Array.from({ length: Math.max(1, e.count) }, () => CR_BY_ID[e.id] ?? "0"));
+  const cr = crById(setup);
+  const crs = setup.enemies.flatMap((e) => Array.from({ length: Math.max(1, e.count) }, () => cr[e.id] ?? "0"));
   const avgLevel = Math.round(
     setup.party.reduce((s, p) => s + p.level, 0) / Math.max(1, setup.party.length),
   );
@@ -126,10 +206,11 @@ export function runSim(setup: SimSetup): SimResult {
 
 export function defaultSetup(): SimSetup {
   return {
-    party: standardParty(20),
-    enemies: [{ id: "pyrrha", count: 1 }],
+    party: standardParty(16),
+    enemies: [{ id: "adult-red-dragon", count: 1 }],
     trials: 250,
     seed: 1,
+    customMonsters: [],
   };
 }
 
@@ -181,10 +262,11 @@ export function runSweep(setup: SimSetup, dim: SweepDim): SweepOut {
   const info = SWEEP_DIMS.find((d) => d.id === dim)!;
   const enemies = enemyList(setup.enemies);
   const trials = setup.trials;
+  const extraById = customById(setup.customMonsters);
 
   if (dim === "level") {
     const rows = levelLadder(
-      { party: setup.party.map((p) => ({ template: p.template, name: p.name, loadout: p.loadout })), enemies, trials, seed: setup.seed },
+      { party: setup.party.map((p) => ({ template: p.template, name: p.name, loadout: p.loadout })), enemies, trials, seed: setup.seed, extraById },
       info.values,
     ).map((r) => ({
       value: r.level,
@@ -198,7 +280,7 @@ export function runSweep(setup: SimSetup, dim: SweepDim): SweepOut {
     return { dimension: dim, baselineValue: cur, rows };
   }
 
-  const swept = scenarioSweep({ party: setup.party, enemies, trials, seed: setup.seed }, dim, info.values);
+  const swept = scenarioSweep({ party: setup.party, enemies, trials, seed: setup.seed, extraById }, dim, info.values);
   return {
     dimension: dim,
     baselineValue: dim.endsWith("Mult") ? 1 : 0,

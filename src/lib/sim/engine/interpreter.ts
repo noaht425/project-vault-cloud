@@ -355,7 +355,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
       }
 
       case "summon": {
-        const ref = MINIONS[node.statBlock];
+        const ref = state.summonRegistry?.[node.statBlock] ?? MINIONS[node.statBlock];
         if (!ref) { say(state, `${source.name} would summon ${node.statBlock} (no stat block)`, source.id); break; }
         const rolled = Math.max(0, Math.round(rollDamage(state, node.count)));
         const existing = [...state.units.values()].filter(

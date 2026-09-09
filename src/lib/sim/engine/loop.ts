@@ -56,6 +56,8 @@ export interface RunOptions {
   party?: Combatant[];
   /** what-if knobs: scale monster HP, shift to-hit / DC / damage on either side */
   tuning?: CombatTuning;
+  /** extra stat blocks a `summon` node can name — custom-loaded monster packs */
+  summonRegistry?: Record<string, Combatant>;
 }
 
 export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatState {
@@ -107,6 +109,7 @@ export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatS
     verbose: opts.keepLog ?? false,
     summonCounter: 0,
     tuning: opts.tuning,
+    summonRegistry: opts.summonRegistry,
   };
 
   say(state, `Initiative: ${order.map((id) => units.get(id)!.name).join(" > ")}`);
