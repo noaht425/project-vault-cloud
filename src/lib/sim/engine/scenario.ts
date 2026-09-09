@@ -66,15 +66,24 @@ export interface ScenarioInput {
  * unique ids / names so the engine and the log can tell them apart.
  */
 export function resolveEnemies(ids: string[], extraById?: Record<string, Combatant>): Combatant[] {
-  const out: Combatant[] = [];
-  for (const raw of ids) {
+  const parsed = ids.map((raw) => {
     const m = /^(.+?)\s*[x*]\s*(\d+)$/.exec(raw.trim());
-    const id = (m ? m[1] : raw).trim();
-    const count = m ? Math.max(1, Number(m[2])) : 1;
+    return { id: (m ? m[1] : raw).trim(), count: m ? Math.max(1, Number(m[2])) : 1 };
+  });
+  // how many of each id in total (across every entry) — decides whether to suffix
+  const totals = new Map<string, number>();
+  for (const p of parsed) totals.set(p.id, (totals.get(p.id) ?? 0) + p.count);
+
+  const out: Combatant[] = [];
+  const seen = new Map<string, number>();
+  for (const { id, count } of parsed) {
     const base = extraById?.[id] ?? FIXTURES_BY_ID[id] ?? MINIONS[id];
     if (!base) throw new Error(`unknown monster "${id}"`);
+    const suffix = (totals.get(id) ?? 1) > 1;
     for (let i = 0; i < count; i++) {
-      out.push(count > 1 ? { ...base, id: `${base.id}-${i + 1}`, name: `${base.name} ${i + 1}` } : base);
+      const n = (seen.get(id) ?? 0) + 1;
+      seen.set(id, n);
+      out.push(suffix ? { ...base, id: `${base.id}-${n}`, name: `${base.name} ${n}` } : base);
     }
   }
   return out;

@@ -33,8 +33,9 @@ import {
 import { validateCombatant } from "./validate";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
-import { runBattle } from "./battle";
-import type { BattleGrid } from "./battle/grid";
+import { runBattle, battleRoster, autoPlace, defaultGridSize, type RosterEntry } from "./battle";
+import { gridFromDef, tilesToString } from "./battle/grid";
+import type { BattleGrid, BattleMapDef } from "./battle/grid";
 import type { BattleFrame, UnitSnap } from "./battle/state";
 import {
   applyRace,
@@ -50,7 +51,8 @@ import {
 } from "./engine/pc-extras";
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
-export type { BattleFrame, UnitSnap, BattleGrid };
+export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry };
+export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
 
@@ -201,6 +203,8 @@ export interface SimSetup {
   seed: number;
   /** stat blocks loaded from a user JSON file (see loadCustomMonsters) */
   customMonsters: Combatant[];
+  /** hand-built battle map (grid + terrain + starting squares) — Battle mode only */
+  battleMap?: BattleMapDef;
 }
 
 export interface SimResult {
@@ -246,8 +250,23 @@ export interface BattleRun {
   seed: number;
 }
 
+/** the id + glyph the fight will use for each combatant, without running it —
+ *  drives the map editor's token tray. */
+export function rosterForSetup(setup: SimSetup): RosterEntry[] {
+  return battleRoster({ party: setup.party, enemies: enemyList(setup.enemies), extraById: customById(setup.customMonsters) });
+}
+
+/** a fresh open-room map def sized to the current crowd, everyone auto-placed */
+export function starterBattleMap(setup: SimSetup): BattleMapDef {
+  const roster = rosterForSetup(setup);
+  const { width, height } = defaultGridSize(roster.length);
+  const def: BattleMapDef = { width, height, tiles: ".".repeat(width * height), placements: {} };
+  def.placements = autoPlace(def, roster);
+  return def;
+}
+
 /** One grid fight rendered as a frame stream, from the same setup Analyze uses.
- *  `overrides.grid` / `overrides.placements` come from the map editor (Phase 3). */
+ *  Uses `setup.battleMap` (the editor's map) when present; `overrides` wins over both. */
 export function runBattleFromSetup(
   setup: SimSetup,
   overrides: { grid?: BattleGrid; placements?: Record<string, { x: number; y: number }>; seed?: number } = {},
@@ -255,14 +274,9 @@ export function runBattleFromSetup(
   const enemies = enemyList(setup.enemies);
   const extraById = customById(setup.customMonsters);
   const seed = overrides.seed ?? setup.seed;
-  const out = runBattle({
-    party: setup.party,
-    enemies,
-    extraById,
-    grid: overrides.grid,
-    placements: overrides.placements,
-    seed,
-  });
+  const grid = overrides.grid ?? (setup.battleMap ? gridFromDef(setup.battleMap) : undefined);
+  const placements = overrides.placements ?? setup.battleMap?.placements;
+  const out = runBattle({ party: setup.party, enemies, extraById, grid, placements, seed });
   return { frames: out.frames, winner: out.result.winner, rounds: out.result.rounds, seed };
 }
 

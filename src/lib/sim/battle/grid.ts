@@ -39,13 +39,46 @@ export interface BattleGrid {
   hazard: HazardSpec;
 }
 
+export const DEFAULT_HAZARD: HazardSpec = { amount: "2d6", damageType: "fire", when: "both", save: { ability: "dex", dc: 12 } };
+
 export function makeGrid(width: number, height: number, fill: Terrain = "floor"): BattleGrid {
-  return {
-    width,
-    height,
-    tiles: new Array(width * height).fill(fill),
-    hazard: { amount: "2d6", damageType: "fire", when: "both", save: { ability: "dex", dc: 12 } },
-  };
+  return { width, height, tiles: new Array(width * height).fill(fill), hazard: { ...DEFAULT_HAZARD } };
+}
+
+const GLYPH_TERRAIN: Record<string, Terrain> = Object.fromEntries(
+  Object.entries(TERRAIN_GLYPH).map(([k, v]) => [v, k as Terrain]),
+);
+
+/** parse a row-major glyph string ("." "~" "#" "!" "o", also " " -> floor) */
+export function parseTiles(str: string, width: number, height: number): Terrain[] {
+  const out: Terrain[] = new Array(width * height).fill("floor");
+  for (let i = 0; i < out.length; i++) {
+    const c = str[i];
+    if (c && GLYPH_TERRAIN[c]) out[i] = GLYPH_TERRAIN[c];
+  }
+  return out;
+}
+
+export function tilesToString(g: BattleGrid): string {
+  return g.tiles.map((t) => TERRAIN_GLYPH[t]).join("");
+}
+
+/** a serialisable map: dimensions + terrain glyphs + starting squares by unit id */
+export interface BattleMapDef {
+  width: number;
+  height: number;
+  tiles: string;
+  placements: Record<string, { x: number; y: number }>;
+}
+
+export function gridFromDef(def: BattleMapDef): BattleGrid {
+  const w = Math.max(4, Math.min(60, Math.round(def.width)));
+  const h = Math.max(4, Math.min(60, Math.round(def.height)));
+  return { width: w, height: h, tiles: parseTiles(def.tiles ?? "", w, h), hazard: { ...DEFAULT_HAZARD } };
+}
+
+export function defFromGrid(g: BattleGrid, placements: BattleMapDef["placements"] = {}): BattleMapDef {
+  return { width: g.width, height: g.height, tiles: tilesToString(g), placements };
 }
 
 export const inBounds = (g: BattleGrid, x: number, y: number): boolean =>

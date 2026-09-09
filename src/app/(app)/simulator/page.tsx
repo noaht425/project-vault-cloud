@@ -35,7 +35,8 @@ import {
   type SweepOut,
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync } from "@/lib/sim/runner";
-import type { BattleRun, UnitSnap } from "@/lib/sim/ui";
+import { autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
+import type { BattleMapDef, BattleRun, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -71,6 +72,7 @@ export default function SimulatorPage() {
   const [sweepDim, setSweepDim] = useState<SweepDim>("level");
   const [running, setRunning] = useState(false);
   const [battleNonce, setBattleNonce] = useState(0);
+  const [editingMap, setEditingMap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const options = useMemo(() => monsterOptions(setup.customMonsters), [setup.customMonsters]);
@@ -193,6 +195,15 @@ export default function SimulatorPage() {
           <p className="text-xs text-muted">
             {SWEEP_DIMS.find((d) => d.id === sweepDim)!.values.map((v) => SWEEP_DIMS.find((d) => d.id === sweepDim)!.fmt(v)).join(" · ")}
           </p>
+        )}
+        {mode === "battle" && (
+          <MapSetup
+            setup={setup}
+            open={editingMap}
+            onToggle={() => setEditingMap((v) => !v)}
+            onChange={(battleMap) => persist({ ...setup, battleMap })}
+            onReset={() => { persist({ ...setup, battleMap: undefined }); setEditingMap(false); }}
+          />
         )}
       </section>
 
@@ -391,6 +402,510 @@ function TBtn({ onClick, label, wide }: { onClick: () => void; label: string; wi
     >
       {label}
     </button>
+  );
+}
+
+// -------------------------------------------------------------- map editor
+
+const FP: Record<string, number> = { tiny: 1, small: 1, medium: 1, large: 2, huge: 3, gargantuan: 4 };
+
+const MAP_TOOLS: { kind: string; glyph: string; label: string }[] = [
+  { kind: "floor", glyph: "·", label: "Floor / erase" },
+  { kind: "wall", glyph: "#", label: "Wall" },
+  { kind: "difficult", glyph: "~", label: "Difficult" },
+  { kind: "cover", glyph: "o", label: "Cover" },
+  { kind: "hazard", glyph: "!", label: "Hazard" },
+];
+const GLYPH: Record<string, string> = { floor: ".", wall: "#", difficult: "~", cover: "o", hazard: "!" };
+
+function mulberry(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const MAP_PRESETS: Record<string, (w: number, h: number) => string> = {
+  "Open field": (w, h) => ".".repeat(w * h),
+  Pillars: (w, h) => {
+    const t = Array<string>(w * h).fill(".");
+    const rng = mulberry(w * 131 + h * 17 + 7);
+    const n = Math.round(4 + rng() * 4);
+    for (let k = 0; k < n; k++) {
+      const px = 2 + Math.floor(rng() * (w - 5));
+      const py = 3 + Math.floor(rng() * (h - 7));
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) if (px + dx < w && py + dy < h) t[(py + dy) * w + px + dx] = "#";
+    }
+    return t.join("");
+  },
+  Chokepoint: (w, h) => {
+    const t = Array<string>(w * h).fill(".");
+    const mid = h >> 1;
+    for (let x = 0; x < w; x++) t[mid * w + x] = "#";
+    const gap = (w >> 1) - 1;
+    for (let g = 0; g < 3; g++) t[mid * w + gap + g] = ".";
+    return t.join("");
+  },
+  Corridor: (w, h) => {
+    const t = Array<string>(w * h).fill(".");
+    for (let x = 0; x < w; x++) for (const y of [0, 1, h - 2, h - 1]) t[y * w + x] = "#";
+    return t.join("");
+  },
+  "Scattered cover": (w, h) => {
+    const t = Array<string>(w * h).fill(".");
+    const rng = mulberry(w * 51 + h * 91 + 3);
+    for (let k = 0; k < Math.round(w * 0.9); k++) {
+      const x = Math.floor(rng() * w);
+      const y = 2 + Math.floor(rng() * (h - 4));
+      t[y * w + x] = rng() < 0.7 ? "o" : "~";
+    }
+    return t.join("");
+  },
+  "Lava vein": (w, h) => {
+    const t = Array<string>(w * h).fill(".");
+    const rng = mulberry(w * 7 + h * 43 + 11);
+    let y = h >> 1;
+    for (let x = 0; x < w; x++) {
+      t[y * w + x] = "!";
+      if (rng() < 0.45) y += rng() < 0.5 ? 1 : -1;
+      y = Math.max(1, Math.min(h - 2, y));
+    }
+    return t.join("");
+  },
+};
+
+function tileAt(def: BattleMapDef, x: number, y: number): string {
+  return def.tiles[y * def.width + x] ?? ".";
+}
+
+/** can `id` (footprint from roster) stand anchored at (x,y) on this def? */
+function tokenFits(def: BattleMapDef, roster: RosterEntry[], id: string, x: number, y: number): boolean {
+  const fp = FP[roster.find((r) => r.id === id)?.size ?? "medium"] ?? 1;
+  const otherCells = new Set<string>();
+  for (const [oid, p] of Object.entries(def.placements)) {
+    if (oid === id) continue;
+    const ofp = FP[roster.find((r) => r.id === oid)?.size ?? "medium"] ?? 1;
+    for (let dy = 0; dy < ofp; dy++) for (let dx = 0; dx < ofp; dx++) otherCells.add(`${p.x + dx},${p.y + dy}`);
+  }
+  for (let dy = 0; dy < fp; dy++) {
+    for (let dx = 0; dx < fp; dx++) {
+      const cx = x + dx;
+      const cy = y + dy;
+      if (cx < 0 || cy < 0 || cx >= def.width || cy >= def.height) return false;
+      const t = tileAt(def, cx, cy);
+      if (t === "#" || t === "o") return false;
+      if (otherCells.has(`${cx},${cy}`)) return false;
+    }
+  }
+  return true;
+}
+
+const MAPS_KEY = "fightSimMaps";
+const readMaps = (): Record<string, BattleMapDef> => {
+  try {
+    return JSON.parse(localStorage.getItem(MAPS_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+};
+
+function MapSetup({
+  setup,
+  open,
+  onToggle,
+  onChange,
+  onReset,
+}: {
+  setup: SimSetup;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (def: BattleMapDef) => void;
+  onReset: () => void;
+}) {
+  const roster = useMemo(() => {
+    try {
+      return rosterForSetup(setup);
+    } catch {
+      return [] as RosterEntry[];
+    }
+  }, [setup]);
+
+  const def = setup.battleMap ?? null;
+  const placed = def ? Object.keys(def.placements).filter((id) => roster.some((r) => r.id === id)).length : 0;
+  const custom = def ? [...def.tiles].some((c) => c !== "." && c !== " ") : false;
+
+  return (
+    <div className="flex flex-col gap-2 border border-border rounded bg-panel/50 p-2">
+      <div className="flex items-center gap-3 flex-wrap text-xs">
+        <button
+          className="text-accent hover:underline"
+          onClick={() => {
+            if (!open && !setup.battleMap) onChange(starterBattleMap(setup));
+            onToggle();
+          }}
+        >
+          {open ? "▾ hide map setup" : "▸ set up the map"}
+        </button>
+        <span className="text-muted">
+          {def
+            ? `${def.width}×${def.height}${custom ? " · custom terrain" : " · open field"} · ${placed}/${roster.length} placed`
+            : "auto: open room, sides apart"}
+        </span>
+        {def && (
+          <button className="text-muted hover:text-danger" onClick={() => onReset()}>
+            reset to auto
+          </button>
+        )}
+      </div>
+      {open && <MapEditor setup={setup} roster={roster} onChange={onChange} />}
+    </div>
+  );
+}
+
+function MapEditor({
+  setup,
+  roster,
+  onChange,
+}: {
+  setup: SimSetup;
+  roster: RosterEntry[];
+  onChange: (def: BattleMapDef) => void;
+}) {
+  const [def, setDef] = useState<BattleMapDef>(() => setup.battleMap ?? starterBattleMap(setup));
+  const defRef = useRef(def);
+  const [tool, setTool] = useState("wall");
+  const brushRef = useRef(1);
+  const [brush, setBrushState] = useState(1);
+  const toolRef = useRef("wall");
+  const painting = useRef(false);
+  const [drag, setDrag] = useState<string | null>(null);
+  const [saveName, setSaveName] = useState("");
+  const [savedMaps, setSavedMaps] = useState<Record<string, BattleMapDef>>(() => readMaps());
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const setBrush = (n: number) => {
+    brushRef.current = n;
+    setBrushState(n);
+  };
+  const pickTool = (t: string) => {
+    toolRef.current = t;
+    setTool(t);
+  };
+
+  /** update local state (and the ref that handlers read to dodge stale closures) */
+  const commit = useCallback((next: BattleMapDef) => {
+    defRef.current = next;
+    setDef(next);
+  }, []);
+  const emit = useCallback(
+    (next: BattleMapDef) => {
+      commit(next);
+      onChange(next);
+    },
+    [commit, onChange],
+  );
+
+  const paint = (x: number, y: number) => {
+    const cur = defRef.current;
+    const r = brushRef.current - 1;
+    const tiles = cur.tiles.split("");
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const cx = x + dx;
+        const cy = y + dy;
+        if (cx < 0 || cy < 0 || cx >= cur.width || cy >= cur.height) continue;
+        tiles[cy * cur.width + cx] = GLYPH[toolRef.current];
+      }
+    }
+    const placements = { ...cur.placements };
+    const next = { ...cur, tiles: tiles.join(""), placements };
+    for (const [id, p] of Object.entries(placements)) {
+      if (!tokenFits(next, roster, id, p.x, p.y)) delete placements[id];
+    }
+    commit(next);
+  };
+
+  const resize = (w: number, h: number) => {
+    const width = Math.max(8, Math.min(40, w));
+    const height = Math.max(8, Math.min(30, h));
+    const tiles = Array<string>(width * height).fill(".");
+    for (let y = 0; y < Math.min(height, def.height); y++)
+      for (let x = 0; x < Math.min(width, def.width); x++) tiles[y * width + x] = tileAt(def, x, y);
+    const placements: BattleMapDef["placements"] = {};
+    for (const [id, p] of Object.entries(def.placements)) if (p.x < width && p.y < height) placements[id] = p;
+    emit({ width, height, tiles: tiles.join(""), placements });
+  };
+
+  const applyPreset = (name: string) => {
+    const tiles = MAP_PRESETS[name](def.width, def.height);
+    const next = { ...def, tiles };
+    for (const [id, p] of Object.entries(next.placements)) if (!tokenFits(next, roster, id, p.x, p.y)) delete next.placements[id];
+    emit(next);
+  };
+
+  const placeToken = (id: string, x: number, y: number) => {
+    if (!roster.some((r) => r.id === id)) return;
+    if (!tokenFits(def, roster, id, x, y)) return;
+    emit({ ...def, placements: { ...def.placements, [id]: { x, y } } });
+  };
+  const unplace = (id: string) => {
+    const placements = { ...def.placements };
+    delete placements[id];
+    emit({ ...def, placements });
+  };
+
+  const cellToken = useMemo(() => {
+    const m = new Map<string, RosterEntry>();
+    for (const [id, p] of Object.entries(def.placements)) {
+      const e = roster.find((r) => r.id === id);
+      if (!e) continue;
+      const fp = FP[e.size] ?? 1;
+      for (let dy = 0; dy < fp; dy++) for (let dx = 0; dx < fp; dx++) m.set(`${p.x + dx},${p.y + dy}`, e);
+    }
+    return m;
+  }, [def.placements, roster]);
+
+  const unplaced = roster.filter((r) => !def.placements[r.id]);
+
+  const saveMap = () => {
+    const name = saveName.trim();
+    if (!name) return;
+    const store = { ...readMaps(), [name]: def };
+    localStorage.setItem(MAPS_KEY, JSON.stringify(store));
+    setSavedMaps(store);
+    setSaveName("");
+  };
+  const loadMap = (name: string) => {
+    const m = readMaps()[name];
+    if (m) emit(m);
+  };
+  const deleteMap = (name: string) => {
+    const store = readMaps();
+    delete store[name];
+    localStorage.setItem(MAPS_KEY, JSON.stringify(store));
+    setSavedMaps(store);
+  };
+  const exportMap = () => {
+    const blob = new Blob([JSON.stringify(def, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "battle-map.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const importMap = (file: File) => {
+    file.text().then((txt) => {
+      try {
+        const m = JSON.parse(txt) as BattleMapDef;
+        if (typeof m.width === "number" && typeof m.height === "number" && typeof m.tiles === "string" && m.placements) {
+          emit({ width: m.width, height: m.height, tiles: m.tiles, placements: m.placements });
+        }
+      } catch {
+        /* ignore a bad file */
+      }
+    });
+  };
+
+  return (
+    <div
+      className="flex flex-col gap-2 text-xs"
+      onPointerUp={() => {
+        if (painting.current) {
+          painting.current = false;
+          onChange(defRef.current);
+        }
+      }}
+      onPointerLeave={() => {
+        if (painting.current) {
+          painting.current = false;
+          onChange(defRef.current);
+        }
+      }}
+    >
+      {/* toolbar */}
+      <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
+        <span className="flex items-center gap-1">
+          size
+          <Stepper value={def.width} min={8} max={40} onChange={(w) => resize(w, def.height)} />
+          ×
+          <Stepper value={def.height} min={8} max={30} onChange={(h) => resize(def.width, h)} />
+        </span>
+        <select
+          className="text-xs"
+          value=""
+          onChange={(e) => {
+            if (e.target.value) applyPreset(e.target.value);
+          }}
+        >
+          <option value="">preset…</option>
+          {Object.keys(MAP_PRESETS).map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <span className="inline-flex rounded border border-border overflow-hidden">
+          {MAP_TOOLS.map((t) => (
+            <button
+              key={t.kind}
+              title={t.label}
+              onClick={() => pickTool(t.kind)}
+              className={`px-2 py-1 font-mono ${tool === t.kind ? "bg-active text-normal" : "bg-panel text-muted hover:bg-hover"}`}
+            >
+              {t.glyph}
+            </button>
+          ))}
+        </span>
+        <span className="flex items-center gap-1">
+          brush
+          <Stepper value={brush} min={1} max={4} onChange={setBrush} />
+        </span>
+        <button className="text-accent hover:underline" onClick={() => emit({ ...def, placements: autoPlace(def, roster) })}>
+          auto-place tokens
+        </button>
+        <button className="text-muted hover:text-normal" onClick={() => emit({ ...def, tiles: ".".repeat(def.width * def.height) })}>
+          clear terrain
+        </button>
+      </div>
+
+      {/* board + tray */}
+      <div className="flex gap-4 flex-wrap items-start">
+        <div className="overflow-x-auto">
+          <div
+            className="inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2 touch-none"
+            style={{ gridTemplateColumns: `repeat(${def.width}, 1ch)`, fontSize: "13px" }}
+          >
+            {Array.from({ length: def.width * def.height }, (_, i) => {
+              const x = i % def.width;
+              const y = Math.floor(i / def.width);
+              const key = `${x},${y}`;
+              const tok = cellToken.get(key);
+              const t = def.tiles[i] ?? ".";
+              const glyph = tok ? tok.glyph : t === "." ? "·" : t;
+              const cls = tok
+                ? tok.side === "party"
+                  ? "text-accent font-semibold"
+                  : "text-danger font-semibold"
+                : t === "#"
+                  ? "text-muted/70"
+                  : t === "."
+                    ? "text-muted/20"
+                    : "text-muted/50";
+              return (
+                <span
+                  key={i}
+                  className={`text-center cursor-crosshair ${cls}`}
+                  style={{ height: "1.15em" }}
+                  draggable={!!tok}
+                  onDragStart={(e) => {
+                    if (!tok) return;
+                    e.dataTransfer.setData("text/plain", tok.id);
+                    setDrag(tok.id);
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData("text/plain") || drag;
+                    if (id) placeToken(id, x, y);
+                    setDrag(null);
+                  }}
+                  onPointerDown={() => {
+                    if (tok) return;
+                    painting.current = true;
+                    paint(x, y);
+                  }}
+                  onPointerEnter={() => painting.current && paint(x, y)}
+                >
+                  {glyph}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 min-w-44">
+          <div
+            className="border border-dashed border-border rounded p-2 flex flex-wrap gap-1.5 min-h-12"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              const id = e.dataTransfer.getData("text/plain") || drag;
+              if (id) unplace(id);
+              setDrag(null);
+            }}
+          >
+            {unplaced.length === 0 && <span className="text-muted">all tokens placed — drag one here to pull it back</span>}
+            {unplaced.map((r) => (
+              <button
+                key={r.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", r.id);
+                  setDrag(r.id);
+                }}
+                className={`px-1.5 py-0.5 rounded bg-hover flex items-center gap-1 ${r.side === "party" ? "text-accent" : "text-danger"}`}
+                title={r.name}
+              >
+                <span className="font-mono font-semibold">{r.glyph}</span>
+                <span className="text-normal max-w-24 truncate">{r.name}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1.5 text-muted">
+            <div className="flex items-center gap-1.5">
+              <input
+                className="flex-1 min-w-0"
+                placeholder="map name"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+              />
+              <button className="text-accent hover:underline" onClick={saveMap}>save</button>
+            </div>
+            {Object.keys(savedMaps).length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <select
+                  className="flex-1 text-xs"
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) loadMap(e.target.value);
+                  }}
+                >
+                  <option value="">load…</option>
+                  {Object.keys(savedMaps).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                <select
+                  className="text-xs"
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) deleteMap(e.target.value);
+                  }}
+                >
+                  <option value="">delete…</option>
+                  {Object.keys(savedMaps).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
+              <button className="text-accent hover:underline" onClick={exportMap}>export JSON</button>
+              <button className="text-accent hover:underline" onClick={() => fileRef.current?.click()}>import JSON</button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && importMap(e.target.files[0])}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="text-muted">Click-drag to paint terrain. Drag a token onto a square to place it; drag it to the tray to remove it. Unplaced tokens get auto-positioned when you run.</p>
+    </div>
   );
 }
 

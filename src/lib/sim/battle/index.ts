@@ -7,12 +7,13 @@ import { makeRng } from "../engine/rng";
 import { buildParty, resolveEnemies, type PartyMemberSpec } from "../engine/scenario";
 import { summarise, type CombatResult } from "../engine/loop";
 import { initCombatant, type CombatantState } from "../engine/state";
-import { BattleGrid, blocksMove, footprint, inBounds, makeGrid, terrainAt } from "./grid";
+import type { Size } from "../schema";
+import { BattleGrid, BattleMapDef, blocksMove, footprint, gridFromDef, inBounds, makeGrid, terrainAt } from "./grid";
 import { runBattleLoop } from "./loop";
 import { BattleState, type BattleFrame, type Pos } from "./state";
 
-export type { BattleFrame, BattleGrid };
-export { makeGrid };
+export type { BattleFrame, BattleGrid, BattleMapDef };
+export { makeGrid, gridFromDef };
 
 export interface BattleSetup {
   party: PartyMemberSpec[];
@@ -45,6 +46,28 @@ function defaultGrid(nUnits: number): BattleGrid {
 
 const monsterGlyph = (i: number): string =>
   i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)); // 1..9 then a..z
+
+export interface RosterEntry {
+  id: string;
+  name: string;
+  side: "party" | "monster";
+  size: Size;
+  glyph: string;
+}
+
+/** ids + glyphs the fight WILL use, without running it — for the map editor's
+ *  token tray. Kept in lock-step with runBattle's own assignment. */
+export function battleRoster(s: Pick<BattleSetup, "party" | "enemies" | "extraById">): RosterEntry[] {
+  const monsters = resolveEnemies(s.enemies, s.extraById);
+  const pcs = buildParty(s.party);
+  const out: RosterEntry[] = [];
+  let mi = 0;
+  let pi = 0;
+  // runBattle inserts monsters first, then pcs, and assigns glyphs in that order
+  for (const m of monsters) out.push({ id: m.id, name: m.name, side: "monster", size: m.size, glyph: monsterGlyph(mi++) });
+  for (const p of pcs) out.push({ id: p.id, name: p.name, side: "party", size: p.size, glyph: String.fromCharCode(65 + (pi++ % 26)) });
+  return out;
+}
 
 /** first anchor square in one of `rows` (scanning columns from the centre out)
  *  where a footprint-`fp` creature fits, is in bounds, not a wall, not occupied */
@@ -120,6 +143,47 @@ function placeUnits(
 function anywhere(grid: BattleGrid, fp: number, occ: Set<string>): { x: number; y: number } | null {
   for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) if (fits(grid, x, y, fp, occ)) return { x, y };
   return null;
+}
+
+/** default room dimensions for a crowd of `n` (used when the editor has no map yet) */
+export function defaultGridSize(n: number): { width: number; height: number } {
+  const g = defaultGrid(n);
+  return { width: g.width, height: g.height };
+}
+
+/** starting squares for every roster entry not already in `fixed` — party at the
+ *  bottom, monsters at the top, spread from the centre out. Editor-side only. */
+export function autoPlace(
+  def: BattleMapDef,
+  roster: RosterEntry[],
+  fixed: Record<string, { x: number; y: number }> = {},
+): Record<string, { x: number; y: number }> {
+  const grid = gridFromDef(def);
+  const occ = new Set<string>();
+  const out: Record<string, { x: number; y: number }> = {};
+  const claim = (x: number, y: number, fp: number): void => {
+    for (let dy = 0; dy < fp; dy++) for (let dx = 0; dx < fp; dx++) occ.add(`${x + dx},${y + dy}`);
+  };
+  for (const [id, p] of Object.entries(fixed)) {
+    const e = roster.find((r) => r.id === id);
+    if (e && fits(grid, p.x, p.y, footprint(e.size), occ)) {
+      out[id] = p;
+      claim(p.x, p.y, footprint(e.size));
+    }
+  }
+  const partyRows = [grid.height - 2, grid.height - 3, grid.height - 4, grid.height - 5];
+  const monsterRows = [1, 2, 3, 4, 5];
+  for (const e of roster) {
+    if (out[e.id]) continue;
+    const fp = footprint(e.size);
+    const a =
+      freeAnchor(grid, fp, e.side === "party" ? partyRows : monsterRows, occ) ?? anywhere(grid, fp, occ);
+    if (a) {
+      out[e.id] = a;
+      claim(a.x, a.y, fp);
+    }
+  }
+  return out;
 }
 
 export function runBattle(s: BattleSetup): BattleOutcome {
