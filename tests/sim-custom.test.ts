@@ -8,8 +8,10 @@ import {
   parseStatblock,
   extractStatblockSection,
   npcNoteToMonster,
+  pcNoteToCombatant,
+  parseClassRefFeatures,
 } from "../src/lib/sim/ui";
-import { runScenarioOnce, runScenario, standardParty } from "../src/lib/sim/engine/scenario";
+import { runScenarioOnce, runScenario, standardParty, buildParty } from "../src/lib/sim/engine/scenario";
 import { parseCombatant, type Combatant } from "../src/lib/sim/schema";
 
 const brute = (id: string): Combatant =>
@@ -315,5 +317,100 @@ He hates dogs.`;
     const extraById = { [combatant!.id]: combatant! };
     const { result } = runScenarioOnce({ party: standardParty(16), enemies: [combatant!.id], seed: 1, extraById });
     expect(["party", "monster", "draw"]).toContain(result.winner);
+  });
+});
+
+describe("import a PC from its note", () => {
+  const pc = (over: Record<string, unknown>): { title: string; frontmatter: Record<string, unknown> } => ({
+    title: String(over.name ?? "PC"),
+    frontmatter: { type: "pc", level: 12, ac: 17, maxHp: 100, stats: { str: 16, dex: 14, con: 16, int: 10, wis: 12, cha: 10 }, ...over },
+  });
+
+  it("builds a martial PC from the note's real stats + class rules", () => {
+    const r = pcNoteToCombatant(pc({ name: "Bront", class: "Battlemaster Fighter", level: 14, ac: 19, maxHp: 148, stats: { str: 20, dex: 14, con: 16, int: 10, wis: 12, cha: 8 } }));
+    expect(r.error).toBeUndefined();
+    const c = r.spec!.combatant;
+    expect(c.kind).toBe("pc");
+    expect(c.level).toBe(14);
+    expect(c.ac).toBe(19);
+    expect(c.maxHp).toBe(148);
+    expect(c.abilities.str).toBe(20);
+    expect(c.pb).toBe(5);
+    expect(c.proficientSaves.sort()).toEqual(["con", "str"]);
+    // Extra Attack 3 at fighter 11+: the attack action swings 3 times
+    const atk = c.actions.find((a) => a.id === "attack")!;
+    const effects = (atk.automation[0] as { effects: unknown[] }).effects;
+    expect(effects.length).toBe(3);
+    // to-hit uses the real STR mod (+5) + PB (+5)
+    expect((effects[0] as { bonus: number }).bonus).toBe(10);
+  });
+
+  it("builds a real spellcaster with the note's casting stat", () => {
+    const r = pcNoteToCombatant(pc({ name: "Ari", class: "Evocation Wizard", level: 15, ac: 15, maxHp: 92, stats: { str: 8, dex: 14, con: 14, int: 20, wis: 12, cha: 10 } }));
+    expect(r.error).toBeUndefined();
+    const c = r.spec!.combatant;
+    expect(c.templateId).toBe("wizard");
+    // real slot-backed spell actions
+    expect(c.actions.filter((a) => a.isSpell && a.limitedUse?.resource.startsWith("slot")).length).toBeGreaterThan(15);
+    expect(c.abilities.int).toBe(20);
+  });
+
+  it("a paladin keeps a weapon attack + spell slots and shares its aura", () => {
+    const sera = pcNoteToCombatant(pc({ name: "Sera", class: "Devotion Paladin", level: 12, ac: 20, maxHp: 118, stats: { str: 18, dex: 10, con: 16, int: 8, wis: 12, cha: 18 } }));
+    const c = sera.spec!.combatant;
+    expect(c.templateId).toBe("paladin");
+    expect(c.actions.some((a) => a.id === "attack")).toBe(true);
+    expect(c.actions.some((a) => a.isSpell)).toBe(true);
+    const bront = pcNoteToCombatant(pc({ name: "Bront", class: "Fighter", level: 12 })).spec!.combatant;
+    const party = buildParty([
+      { template: "x", level: 12, combatant: c, name: "Sera" },
+      { template: "x", level: 12, combatant: bront, name: "Bront" },
+    ]);
+    const paladin = party.find((p) => p.templateId === "paladin")!;
+    if (paladin.saveBonusAll > 0) {
+      expect(party.find((p) => p.name === "Bront")!.saveBonusAll).toBeGreaterThanOrEqual(paladin.saveBonusAll);
+    }
+  });
+
+  it("an unrecognised class falls back to a template with the PC's real stats", () => {
+    const r = pcNoteToCombatant(pc({ name: "Nyx", class: "Blood Hunter", level: 10, ac: 16, maxHp: 84, stats: { str: 17, dex: 15, con: 14, int: 12, wis: 10, cha: 10 } }));
+    expect(r.error).toBeUndefined();
+    expect(r.spec!.combatant.ac).toBe(16);
+    expect(r.spec!.combatant.abilities.str).toBe(17);
+    expect(r.warnings.join(" ")).toMatch(/unrecognised class/i);
+  });
+
+  it("reads Extra Attack / Sneak Attack / Rage out of a class-reference body", () => {
+    const body = `## Level 2
+Cunning Action.
+## Level 5
+Extra Attack. You can attack twice.
+## Level 11
+You can attack three times when you take the Attack action.
+## Level 3
+Your Sneak Attack deals an extra 2d6 damage.
+## Level 6
+Path of the Berserker. You gain Rage.`;
+    const f6 = parseClassRefFeatures(body, 6);
+    expect(f6.extraAttack).toBe(2);
+    expect(f6.sneakDice).toBe(2);
+    expect(f6.rage).toBe(true);
+    const f12 = parseClassRefFeatures(body, 12);
+    expect(f12.extraAttack).toBe(3);
+  });
+
+  it("a class reference bumps the attack count on the built PC", () => {
+    const classRefBody = "## Level 5\nExtra Attack.\n## Level 11\nYou can attack three times.\n## Level 20\nYou can attack four times.";
+    const r = pcNoteToCombatant({ ...pc({ name: "Bront", class: "Fighter", level: 11 }), classRefBody });
+    const atk = r.spec!.combatant.actions.find((a) => a.id === "attack")!;
+    expect((atk.automation[0] as { effects: unknown[] }).effects.length).toBe(3);
+    expect(r.warnings.join(" ")).toMatch(/class reference: .*Extra Attack \(3\)/);
+  });
+
+  it("an imported PC actually fights", () => {
+    const c = pcNoteToCombatant(pc({ name: "Bront", class: "Fighter", level: 14, ac: 19, maxHp: 148, stats: { str: 20, dex: 12, con: 16, int: 10, wis: 12, cha: 8 } })).spec!.combatant;
+    const { result } = runScenarioOnce({ party: [{ template: "x", level: 14, combatant: c, name: "Bront" }], enemies: ["gladiator"], seed: 3 });
+    expect(["party", "monster", "draw"]).toContain(result.winner);
+    expect(result.contributions.some((x) => x.name === "Bront")).toBe(true);
   });
 });

@@ -14,21 +14,27 @@ export interface PartyMemberSpec {
   name?: string;
   level: number;
   loadout?: Loadout; // feats / magic items
+  /** a fully-built PC (e.g. imported from a PC note) — used as-is; `template` is ignored */
+  combatant?: Combatant;
 }
+
+const isPaladin = (p: Combatant): boolean => p.templateId === "vengeance-paladin" || p.templateId === "paladin";
 
 /** Turn specs into schema-valid combatants, with unique ids and the paladin aura shared. */
 export function buildParty(specs: PartyMemberSpec[]): Combatant[] {
   const party = specs.map((s, i) => {
-    let c = { ...makeTemplate(s.template, s.level, s.name), id: `pc-${i + 1}-${s.template}` };
+    let c = s.combatant
+      ? { ...s.combatant, name: s.name ?? s.combatant.name, id: `pc-${i + 1}-${s.combatant.templateId ?? "pc"}` }
+      : { ...makeTemplate(s.template, s.level, s.name), id: `pc-${i + 1}-${s.template}` };
     if (s.loadout) c = { ...applyLoadout(c, s.loadout), id: c.id, name: c.name };
     return c;
   });
 
   // Aura of Protection: a paladin extends its +CHA save bonus to every ally.
-  const auraBonus = Math.max(0, ...party.map((p) => (p.templateId === "vengeance-paladin" ? p.saveBonusAll : 0)));
+  const auraBonus = Math.max(0, ...party.map((p) => (isPaladin(p) ? p.saveBonusAll : 0)));
   if (auraBonus > 0) {
     for (const p of party) {
-      if (p.templateId !== "vengeance-paladin") p.saveBonusAll = Math.max(p.saveBonusAll, auraBonus);
+      if (!isPaladin(p)) p.saveBonusAll = Math.max(p.saveBonusAll, auraBonus);
     }
   }
   return party;

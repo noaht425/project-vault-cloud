@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/Button";
 import {
   ABILITIES,
   BUILDER_CONDITIONS,
-  classToTemplate,
   DAMAGE_TYPES,
   defaultSetup,
   draftToCombatant,
@@ -16,6 +15,7 @@ import {
   monsterOptions,
   npcNoteToMonster,
   parseStatblock,
+  pcNoteToCombatant,
   SIZES,
   standardParty,
   suggestedPb,
@@ -771,26 +771,59 @@ function PartyEditor({
         setImportMsg("No PC notes found in this workspace.");
         return;
       }
-      const notes = await Promise.all(
-        list.slice(0, 8).map((n) => fetch(`/api/notes/${n.id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)),
-      );
-      const specs = notes
-        .filter((n): n is { name: string; frontmatter: Record<string, unknown> } => !!n && (n.frontmatter as { type?: string })?.type === "pc")
-        .slice(0, 6)
-        .map((n) => {
-          const fm = n.frontmatter as { class?: string; level?: number | string };
-          return {
-            template: classToTemplate(fm.class ?? ""),
-            name: n.name,
-            level: Math.max(1, Math.min(20, Math.round(Number(fm.level) || 1))),
-          };
-        });
+      const notes = (
+        await Promise.all(
+          list.slice(0, 8).map((n) => fetch(`/api/notes/${n.id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)),
+        )
+      )
+        .filter((n): n is { name: string; body?: string; frontmatter: Record<string, unknown> } => !!n && (n.frontmatter as { type?: string })?.type === "pc")
+        .slice(0, 6);
+
+      // resolve the linked class-reference note bodies (frontmatter.classRef is a title)
+      const refTitles = new Set(notes.map((n) => String(n.frontmatter.classRef ?? "").trim()).filter(Boolean));
+      const refBodies = new Map<string, string>();
+      if (refTitles.size) {
+        const refList: { id: string; name: string }[] = await fetch("/api/notes?type=class-reference")
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => []);
+        await Promise.all(
+          refList
+            .filter((r) => refTitles.has(r.name))
+            .map((r) =>
+              fetch(`/api/notes/${r.id}`)
+                .then((x) => (x.ok ? x.json() : null))
+                .catch(() => null)
+                .then((full) => {
+                  if (full?.body) refBodies.set(r.name, full.body);
+                }),
+            ),
+        );
+      }
+
+      const specs: SimSetup["party"] = [];
+      let usedRef = 0;
+      let fellBack = 0;
+      for (const n of notes) {
+        const classRefBody = refBodies.get(String(n.frontmatter.classRef ?? "").trim());
+        const r = pcNoteToCombatant({ title: n.name, frontmatter: n.frontmatter, classRefBody });
+        if (!r.spec) continue;
+        specs.push({ template: r.spec.combatant.templateId ?? "gwm-fighter", name: r.spec.name, level: r.spec.level, combatant: r.spec.combatant });
+        if (classRefBody && r.warnings.some((w) => w.startsWith("class reference:"))) usedRef++;
+        if (r.warnings.some((w) => /unrecognised class/.test(w))) fellBack++;
+      }
       if (!specs.length) {
-        setImportMsg("PC notes found but none had a usable class/level.");
+        setImportMsg("PC notes found but none could be built.");
         return;
       }
       onChange(specs);
-      setImportMsg(`Imported ${specs.length} PC${specs.length === 1 ? "" : "s"} — mapped to the nearest template.`);
+      setImportMsg(
+        `Imported ${specs.length} PC${specs.length === 1 ? "" : "s"} from their notes` +
+          (usedRef ? `, ${usedRef} read features from a class reference` : "") +
+          (fellBack ? `, ${fellBack} fell back to a template` : "") +
+          ".",
+      );
+    } catch {
+      setImportMsg("Couldn't reach the notes API.");
     } finally {
       setImporting(false);
     }
@@ -839,19 +872,37 @@ function PartyEditor({
                 placeholder="name"
                 onChange={(e) => patch(i, { name: e.target.value })}
               />
-              <select
-                className="flex-1 min-w-40"
-                value={p.template}
-                onChange={(e) => patch(i, { template: e.target.value })}
-              >
-                {TEMPLATE_IDS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
+              {p.combatant ? (
+                <span className="flex-1 min-w-40 text-xs text-muted flex items-center gap-1.5">
+                  <span className="text-normal">{p.combatant.templateId ?? "pc"}</span>
+                  <span className="opacity-70">· built from note</span>
+                  <button
+                    className="text-accent hover:underline"
+                    onClick={() => patch(i, { combatant: undefined })}
+                    title="switch to an editable template"
+                  >
+                    detach
+                  </button>
+                </span>
+              ) : (
+                <select
+                  className="flex-1 min-w-40"
+                  value={p.template}
+                  onChange={(e) => patch(i, { template: e.target.value })}
+                >
+                  {TEMPLATE_IDS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              )}
               <span className="text-muted text-xs">lvl</span>
-              <Stepper value={p.level} min={1} max={20} onChange={(level) => patch(i, { level })} />
+              {p.combatant ? (
+                <span className="text-sm w-8 text-center tabular-nums">{p.level}</span>
+              ) : (
+                <Stepper value={p.level} min={1} max={20} onChange={(level) => patch(i, { level })} />
+              )}
               <button
                 className={`text-xs px-1 ${open.has(i) ? "text-accent" : "text-muted hover:text-normal"}`}
                 onClick={() =>

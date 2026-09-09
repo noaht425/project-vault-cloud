@@ -4,7 +4,11 @@
 
 import { MONSTER_FIXTURES } from "./fixtures";
 import { MINIONS } from "./engine/minions";
-import { TEMPLATE_IDS, type Loadout } from "./engine/templates";
+import { TEMPLATE_IDS, makeTemplate, type Loadout } from "./engine/templates";
+import { makeCaster } from "./spells/caster";
+import { maxSlotLevel } from "./spells/slots";
+import type { SpellClass } from "./spells/types";
+import type { CasterKind } from "./spells/slots";
 import { encounterBudget } from "./encounterBudget";
 import {
   levelLadder,
@@ -20,6 +24,7 @@ import {
   DAMAGE_TYPES,
   SIZES,
   type Ability,
+  type AutomationNode,
   type Combatant,
   type Condition,
   type DamageType,
@@ -909,4 +914,310 @@ export function npcNoteToMonster(note: NpcNoteInput): { combatant?: Combatant; w
     };
   }
   return { warnings: [], error: r.error ?? "couldn't build a monster from this note" };
+}
+
+// -------------------------------------------- turn a PC note into a combatant
+//
+// The party "import from PC notes" flow used to map a class string to the
+// nearest of ~12 hand-authored templates and pass only the level. This builds
+// the actual character instead: real ability scores / AC / HP / level from the
+// note, class mechanics (saves, Extra Attack, spell slots, sneak dice, rage,
+// ...) from 5e rules, and a best-effort scan of the linked class-reference
+// note's "## Level N" sections for feature markers. Unknown class -> the old
+// template path, but with the note's real stats layered on.
+
+type ClassKey =
+  | "fighter" | "barbarian" | "rogue" | "monk" | "ranger" | "paladin"
+  | "wizard" | "sorcerer" | "cleric" | "druid" | "bard" | "warlock" | "artificer";
+
+const CLASS_PATTERNS: [RegExp, ClassKey][] = [
+  [/barbarian/i, "barbarian"], [/\bbard\b/i, "bard"], [/cleric/i, "cleric"],
+  [/druid/i, "druid"], [/\bmonk\b/i, "monk"], [/paladin/i, "paladin"],
+  [/ranger/i, "ranger"], [/rogue|assassin|thief/i, "rogue"], [/sorcerer/i, "sorcerer"],
+  [/warlock/i, "warlock"], [/wizard|mage/i, "wizard"], [/artificer/i, "artificer"],
+  [/fighter|knight|warrior|champion/i, "fighter"],
+];
+
+function normalizeClass(s: string): ClassKey | null {
+  for (const [re, k] of CLASS_PATTERNS) if (re.test(s)) return k;
+  return null;
+}
+
+const CLASS_SAVES: Record<ClassKey, Ability[]> = {
+  fighter: ["str", "con"], barbarian: ["str", "con"], rogue: ["dex", "int"],
+  monk: ["str", "dex"], ranger: ["str", "dex"], paladin: ["wis", "cha"],
+  wizard: ["int", "wis"], sorcerer: ["con", "cha"], cleric: ["wis", "cha"],
+  druid: ["int", "wis"], bard: ["dex", "cha"], warlock: ["wis", "cha"], artificer: ["con", "int"],
+};
+
+const CASTER_OF: Partial<Record<ClassKey, { kind: CasterKind; cls: SpellClass; ability: Ability }>> = {
+  wizard: { kind: "full", cls: "wizard", ability: "int" },
+  sorcerer: { kind: "full", cls: "sorcerer", ability: "cha" },
+  cleric: { kind: "full", cls: "cleric", ability: "wis" },
+  druid: { kind: "full", cls: "druid", ability: "wis" },
+  bard: { kind: "full", cls: "bard", ability: "cha" },
+  warlock: { kind: "warlock", cls: "warlock", ability: "cha" },
+  paladin: { kind: "half", cls: "paladin", ability: "cha" },
+  ranger: { kind: "half", cls: "ranger", ability: "wis" },
+  artificer: { kind: "half", cls: "artificer", ability: "int" },
+};
+
+const mod = (score: number): number => Math.floor((score - 10) / 2);
+const pbForLevel = (lvl: number): number => 2 + Math.floor((Math.max(1, Math.min(20, lvl)) - 1) / 4);
+
+/** Extra Attack progression by class (weapon swings per Attack action). */
+function attackCount(cls: ClassKey, level: number): number {
+  if (cls === "fighter") return level >= 20 ? 4 : level >= 11 ? 3 : level >= 5 ? 2 : 1;
+  if (["barbarian", "paladin", "ranger", "monk"].includes(cls)) return level >= 5 ? 2 : 1;
+  return 1;
+}
+
+export interface ClassRefFeatures {
+  extraAttack?: number;
+  sneakDice?: number;
+  maxSpellLevel?: number;
+  rage?: boolean;
+  actionSurge?: number;
+  ki?: boolean;
+  superiority?: boolean;
+  divineSmite?: boolean;
+  found: string[];
+}
+
+/** Scan a class-reference note's "## Level ≤ N" sections for feature markers. */
+export function parseClassRefFeatures(body: string, level: number): ClassRefFeatures {
+  // sections: "## Level N ..." up to the next such heading
+  const heads = [...body.matchAll(/^##\s*Level\s*(\d+)\b.*$/gim)];
+  let text = "";
+  for (let i = 0; i < heads.length; i++) {
+    if (Number(heads[i][1]) > level) continue;
+    const start = heads[i].index! + heads[i][0].length;
+    const end = i + 1 < heads.length ? heads[i + 1].index! : body.length;
+    text += " " + body.slice(start, end);
+  }
+  if (!heads.length) text = body; // no level headings — treat the whole note as "applies"
+
+  const f: ClassRefFeatures = { found: [] };
+  const WN: Record<string, number> = { once: 1, twice: 2, thrice: 3, one: 1, two: 2, three: 3, four: 4 };
+
+  // Extra Attack — take the largest count phrased anywhere in the in-scope text
+  let ea = 0;
+  for (const m of text.matchAll(/\battack\s+(once|twice|thrice|two|three|four|\d)\s*times?\b/gi)) {
+    ea = Math.max(ea, WN[m[1].toLowerCase()] ?? Number(m[1]) ?? 0);
+  }
+  for (const m of text.matchAll(/\b(?:make|makes)\s+(one|two|three|four|\d)\s+(?:weapon |melee |ranged )?attacks?\b/gi)) {
+    ea = Math.max(ea, WN[m[1].toLowerCase()] ?? Number(m[1]) ?? 0);
+  }
+  for (const m of text.matchAll(/\bextra attack\s*\((\d)\)/gi)) ea = Math.max(ea, Number(m[1]) + 1);
+  if (!ea && /\bextra attack\b/i.test(text)) ea = 2;
+  if (ea >= 2) { f.extraAttack = ea; f.found.push(`Extra Attack (${ea})`); }
+  const sa = /sneak attack[^.]*?(\d+)\s*d6|(\d+)\s*d6[^.]*?sneak/i.exec(text);
+  if (sa) { f.sneakDice = Number(sa[1] ?? sa[2]); f.found.push(`Sneak Attack (${f.sneakDice}d6)`); }
+  if (/\bspellcasting\b|\bspell slots?\b|\bcast (?:a )?spells?\b|\bpact magic\b/i.test(text)) {
+    const lv = /(\d)(?:st|nd|rd|th)[- ]?level spells?/i.exec(text);
+    if (lv) { f.maxSpellLevel = Number(lv[1]); f.found.push(`Spellcasting (to ${f.maxSpellLevel}${["", "st", "nd", "rd"][f.maxSpellLevel] ?? "th"} level)`); }
+    else f.found.push("Spellcasting");
+  }
+  if (/\brage\b/i.test(text)) { f.rage = true; f.found.push("Rage"); }
+  if (/action surge/i.test(text)) {
+    f.actionSurge = /action surge[^.]{0,40}(twice|two uses|2 uses)/i.test(text) ? 2 : 1;
+    f.found.push("Action Surge");
+  }
+  if (/\bki\b|ki points?|martial arts|flurry of blows/i.test(text)) { f.ki = true; f.found.push("Ki / Martial Arts"); }
+  if (/superiority dic|combat superiority|maneuvers?/i.test(text)) { f.superiority = true; f.found.push("Superiority Dice"); }
+  if (/divine smite/i.test(text)) { f.divineSmite = true; f.found.push("Divine Smite"); }
+  return f;
+}
+
+export interface PcNoteInput {
+  title: string;
+  frontmatter?: Record<string, unknown>;
+  /** body of the linked class-reference note (frontmatter.classRef), if resolved */
+  classRefBody?: string;
+}
+
+export interface PcBuildResult {
+  spec?: { name: string; level: number; combatant: Combatant };
+  warnings: string[];
+  error?: string;
+}
+
+function readPc(fm: Record<string, unknown>): {
+  cls: string; level: number; ac: number; hp: number; abilities: Combatant["abilities"];
+} {
+  const stats = (fm.stats ?? {}) as Partial<Record<Ability, unknown>>;
+  const abilities = {
+    str: Number(stats.str) || 10, dex: Number(stats.dex) || 10, con: Number(stats.con) || 10,
+    int: Number(stats.int) || 10, wis: Number(stats.wis) || 10, cha: Number(stats.cha) || 10,
+  };
+  return {
+    cls: String(fm.class ?? ""),
+    level: Math.max(1, Math.min(20, Math.round(Number(fm.level) || 1))),
+    ac: Math.max(1, Math.round(Number(fm.ac) || 0)) || 10 + mod(abilities.dex),
+    hp: Math.max(1, Math.round(Number(fm.maxHp ?? fm.hp) || 0)) || 8 * (Math.round(Number(fm.level) || 1)),
+    abilities,
+  };
+}
+
+/** A rules-based martial PC (fighter / barbarian / rogue / monk / a weapon ranger). */
+function martialPc(
+  cls: ClassKey, name: string, level: number, abilities: Combatant["abilities"], ac: number, hp: number,
+  cf: ClassRefFeatures,
+): Combatant {
+  const pb = pbForLevel(level);
+  const strMod = mod(abilities.str);
+  const dexMod = mod(abilities.dex);
+  const usesDex = dexMod > strMod || cls === "rogue" || cls === "monk";
+  const atkMod = usesDex ? dexMod : strMod;
+  const toHit = pb + atkMod;
+  const swings = cf.extraAttack ?? attackCount(cls, level);
+  const monkDie = level >= 17 ? 10 : level >= 11 ? 8 : level >= 5 ? 6 : 4;
+  const baseDie = cls === "monk" ? `1d${monkDie}` : usesDex ? "1d8" : "2d6";
+  const perHit = `${baseDie}+${atkMod}`;
+
+  const dmgType: DamageType = cls === "monk" ? "bludgeoning" : usesDex ? "piercing" : "slashing";
+  const mkOnHit = (): AutomationNode[] => {
+    const nodes: AutomationNode[] = [{ type: "damage", amount: perHit, damageType: dmgType }];
+    if (cls === "rogue") nodes.push({ type: "damage", amount: `${cf.sneakDice ?? Math.ceil(level / 2)}d6`, damageType: dmgType });
+    return nodes;
+  };
+
+  const resources: NonNullable<Combatant["resources"]> = {};
+  const actions: Combatant["actions"] = [];
+  const reactions: Combatant["actions"] = [];
+  const opener: string[] = [];
+
+  const nSwings = cls === "monk" ? swings + 1 : swings;
+  const attackEffects: AutomationNode[] = Array.from({ length: nSwings }, (): AutomationNode => ({
+    type: "attack", bonus: toHit,
+    ...(cls === "barbarian" ? { adv: "adv" as const } : {}),
+    onHit: mkOnHit(),
+  }));
+  // monk: fold a Stunning Strike attempt into the first swing
+  if (cls === "monk" || cf.ki) {
+    const dc = 8 + pb + mod(abilities.wis);
+    const first = attackEffects[0];
+    if (first.type === "attack") {
+      first.onHit.push({
+        type: "branch", if: "self.resource('ki') > 0",
+        then: [
+          { type: "spendResource", resource: "ki", amount: 1 },
+          { type: "save", ability: "con", dc, onFail: [{ type: "applyCondition", condition: "stunned", durationRounds: 1, saveEnds: { ability: "con", dc, at: "endOfTurn" } }] },
+        ],
+      });
+    }
+  }
+  actions.push({
+    id: "attack", name: "Attack", cost: { action: 1 }, recharge: "none",
+    automation: [{ type: "target", who: { who: cls === "rogue" ? "squishiestEnemy" : "aiChoice" }, effects: attackEffects }],
+  });
+
+  if (cls === "fighter" && (cf.actionSurge ?? 1) >= 1) {
+    resources.action_surge = { max: (cf.actionSurge ?? 1) + (level >= 17 ? 1 : 0), recharge: "shortRest" };
+    actions.push({
+      id: "action-surge", name: "Action Surge", cost: { bonus: 1 }, recharge: "none",
+      limitedUse: { resource: "action_surge", amount: 1 },
+      automation: [{ type: "useAction", action: "attack", times: 1 }],
+    });
+    opener.push("action-surge");
+  }
+  const specialRules: Combatant["specialRules"] = [];
+  const traits: Combatant["traits"] = [];
+  if (cls === "barbarian" || cf.rage) {
+    resources.rage = { max: level >= 17 ? 6 : level >= 12 ? 5 : level >= 6 ? 4 : 3, recharge: "longRest" };
+    actions.push({
+      id: "rage", name: "Rage", cost: { bonus: 1 }, recharge: "none",
+      limitedUse: { resource: "rage", amount: 1 },
+      automation: [{ type: "target", who: { who: "self" }, effects: [{ type: "applyEffect", name: "rage", durationRounds: 10, mods: { damageTakenMultiplier: 0.75 } }] }],
+    });
+    opener.unshift("rage");
+  }
+  if (cls === "monk" || cf.ki) resources.ki = { max: Math.max(2, level), recharge: "shortRest" };
+  if ((cls === "fighter" && cf.superiority) || cf.superiority) {
+    resources.superiority = { max: 4 + (level >= 15 ? 1 : 0), recharge: "shortRest" };
+    reactions.push({
+      id: "riposte", name: "Riposte", cost: { reaction: 1 }, recharge: "none",
+      trigger: "self.wasMissedByMeleeAttack", limitedUse: { resource: "superiority", amount: 1 },
+      automation: [{ type: "useAction", action: "attack", times: 1 }],
+    });
+  }
+  const saves = CLASS_SAVES[cls];
+  const proficientSaves = cls === "monk" && level >= 14 ? [...ABILITIES] : saves;
+
+  return {
+    id: `pc-${cls}`, name, kind: "pc", size: "medium", level, templateId: cls,
+    ac, maxHp: hp, speeds: { walk: cls === "monk" ? 40 : 30 },
+    abilities, pb, proficientSaves, saveBonusAll: 0,
+    resistances: [], resistancesNonmagical: cls === "barbarian" || cf.rage ? ["bludgeoning", "piercing", "slashing"] : [],
+    immunities: [], vulnerabilities: [], conditionImmunities: [],
+    specialRules, resources, traits, actions, reactions,
+    ai: { targetPriority: cls === "rogue" ? "squishiest" : "lowestHp", aoeMinTargets: 2, opener, saveLegendaryResistanceFor: [], keepDistance: cls === "ranger" && usesDex, neverRetreat: true, focusFire: true },
+  };
+}
+
+/** Build a Combatant that reflects this specific PC, not the nearest template. */
+export function pcNoteToCombatant(note: PcNoteInput): PcBuildResult {
+  const fm = note.frontmatter ?? {};
+  if ((fm.type ?? "pc") !== "pc") return { warnings: [], error: "not a PC note" };
+  const { cls, level, ac, hp, abilities } = readPc(fm);
+  const key = normalizeClass(cls || note.title);
+  const warnings: string[] = [];
+  const cf = note.classRefBody
+    ? parseClassRefFeatures(note.classRefBody, level)
+    : { found: [] as string[] };
+  if (note.classRefBody && cf.found.length) warnings.push(`class reference: ${cf.found.join(", ")}`);
+  else if (note.classRefBody) warnings.push("class reference found but no recognisable features in it");
+
+  if (!key) {
+    // fall back to the nearest template, but overlay the note's real numbers
+    const tmpl = makeTemplate(classToTemplate(cls), level, note.title);
+    const overlaid: Combatant = { ...tmpl, name: note.title, level, ac, maxHp: hp, abilities, pb: pbForLevel(level) };
+    warnings.push(`unrecognised class "${cls || "(none)"}" — used the ${tmpl.templateId} template with this PC's stats`);
+    return { spec: { name: note.title, level, combatant: parseCombatant(overlaid) }, warnings };
+  }
+
+  const caster = CASTER_OF[key];
+  const isPrimaryCaster = caster && ["wizard", "sorcerer", "cleric", "druid", "bard", "warlock"].includes(key);
+  const FOCUS: Partial<Record<ClassKey, "blaster" | "controller" | "support" | "balanced">> = {
+    wizard: "blaster", sorcerer: "blaster", warlock: "blaster",
+    cleric: "support", druid: "support", bard: "controller",
+  };
+  let combatant: Combatant;
+
+  if (isPrimaryCaster && caster) {
+    combatant = makeCaster({
+      id: `pc-${key}`, name: note.title, level,
+      spellClass: caster.cls, casterKind: caster.kind, spellAbility: caster.ability,
+      ac, hp, abilities, proficientSaves: CLASS_SAVES[key], focus: FOCUS[key] ?? "balanced",
+    });
+    combatant = { ...combatant, templateId: key };
+    if (cf.maxSpellLevel && caster.kind !== "warlock") {
+      const have = maxSlotLevel(caster.kind, level);
+      if (cf.maxSpellLevel < have) warnings.push(`class reference caps spells at ${cf.maxSpellLevel}th level (rules give ${have}) — kept the rules value`);
+    }
+  } else if (key === "paladin" || key === "ranger" || key === "artificer") {
+    // half-caster with a weapon: makeCaster for the spells + a martial attack action
+    const martial = martialPc(key, note.title, level, abilities, ac, hp, cf);
+    const c = makeCaster({
+      id: `pc-${key}`, name: note.title, level,
+      spellClass: caster!.cls, casterKind: caster!.kind, spellAbility: caster!.ability,
+      ac, hp, abilities, proficientSaves: CLASS_SAVES[key], focus: "balanced",
+      extraActions: martial.actions, extraReactions: martial.reactions,
+    });
+    combatant = { ...c, templateId: key, resources: { ...c.resources, ...martial.resources } };
+    if (key === "paladin" && (cf.divineSmite ?? true)) {
+      // Divine Smite: fold ~2d8 radiant into the weapon's first hit
+      const atk = combatant.actions.find((a) => a.id === "attack");
+      const eff = atk?.automation[0];
+      if (eff && eff.type === "target" && eff.effects[0]?.type === "attack") {
+        eff.effects[0].onHit.push({ type: "damage", amount: `${Math.min(5, 2 + Math.floor(level / 6))}d8`, damageType: "radiant" });
+      }
+    }
+  } else {
+    combatant = martialPc(key, note.title, level, abilities, ac, hp, cf);
+  }
+
+  const v = validateCombatant(combatant);
+  if (!v.ok) return { warnings, error: v.errors[0] };
+  return { spec: { name: note.title, level, combatant: parseCombatant(combatant) }, warnings: [...warnings, ...v.warnings] };
 }
