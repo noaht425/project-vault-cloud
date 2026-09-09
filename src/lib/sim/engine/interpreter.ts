@@ -45,6 +45,18 @@ interface RunCtx {
   spell?: boolean;
   /** effect / condition names applied during this action (for concentration linkage) */
   appliedNames?: string[];
+  /** battle mode only: geometry-aware target picker. Return null to fall back to
+   *  the abstract `selectTargets`. Never set by the Monte-Carlo engine. */
+  geoTargets?: (node: Extract<AutomationNode, { type: "target" }>, source: CombatantState) => CombatantState[] | null;
+  /** battle mode only: per-target attack tweaks (cover -> +AC, long range -> disadvantage) */
+  attackMods?: (target: CombatantState) => { acBonus?: number; disadvantage?: boolean };
+}
+
+/** Options passed to `runAction`; `geo` seeds the battle-mode seams onto the root ctx. */
+export interface RunActionOpts {
+  asLegendary?: boolean;
+  asReaction?: boolean;
+  geo?: Pick<RunCtx, "geoTargets" | "attackMods">;
 }
 
 const LOCK_CONDITIONS: Condition[] = ["stunned", "paralyzed", "incapacitated", "unconscious", "petrified"];
@@ -188,7 +200,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
         break;
 
       case "target": {
-        const targets = ctx.forceScope ?? selectTargets(node, ctx);
+        const targets = ctx.forceScope ?? ctx.geoTargets?.(node, source) ?? selectTargets(node, ctx);
         // an area / multi-target effect rolls its damage dice once and shares
         // the total across every creature caught (each still saves for its own half)
         const multi = targets.length > 1;
@@ -207,7 +219,9 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
         const t = ctx.scope[0];
         if (!t) break;
         const bonus = typeof node.bonus === "number" ? node.bonus : 12;
-        const res = rollAttack(state, source, t, bonus, node.adv, node.critRange ?? 20);
+        const tweak = ctx.attackMods?.(t);
+        const adv = tweak?.disadvantage ? "dis" : node.adv;
+        const res = rollAttack(state, source, t, bonus, adv, node.critRange ?? 20, tweak?.acBonus ?? 0);
         const next: RunCtx = { ...ctx, last: { ...ctx.last, attackHit: res.hit, attackCrit: res.crit, attackAdv: res.hadAdvantage }, crit: res.crit, inAttack: true, depth: ctx.depth + 1 };
         if (res.hit) runAutomation(node.onHit, next);
         else if (node.onMiss) runAutomation(node.onMiss, next);
@@ -398,9 +412,10 @@ export function runAction(
   state: CombatState,
   source: CombatantState,
   action: Action,
-  opts: { asLegendary?: boolean; asReaction?: boolean } = {},
+  opts: RunActionOpts = {},
 ): void {
   if (isIncapacitated(source)) return;
+  const geo = opts.geo ?? {};
 
   // track "is it singing?" for summon gates (a song-driven raise-minions ability)
   if (/\b(song|sing)\b/i.test(action.name)) source.lastSangRound = state.round;
@@ -414,7 +429,7 @@ export function runAction(
   const appliedNames: string[] | undefined = action.concentration ? [] : undefined;
 
   if (!state.verbose) {
-    runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, spell, appliedNames });
+    runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, spell, appliedNames, ...geo });
     if (action.concentration && appliedNames && appliedNames.length) {
       source.concentratingOn = action.id;
       source.concentrationEffects = [...new Set(appliedNames)];
@@ -425,7 +440,7 @@ export function runAction(
   const before = hpSnapshot(state);
   const condsBefore = new Map([...state.units.values()].map((u) => [u.id, new Set(u.conditions.keys())]));
   const saveLog = new Map<string, boolean>();
-  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, spell, appliedNames });
+  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, spell, appliedNames, ...geo });
   if (action.concentration && appliedNames && appliedNames.length) {
     source.concentratingOn = action.id;
     source.concentrationEffects = [...new Set(appliedNames)];

@@ -65,7 +65,7 @@ export interface ScenarioInput {
  * id, optionally with a count: "chain-devil x3", "wolf x4". Repeats get
  * unique ids / names so the engine and the log can tell them apart.
  */
-function resolveEnemies(ids: string[], extraById?: Record<string, Combatant>): Combatant[] {
+export function resolveEnemies(ids: string[], extraById?: Record<string, Combatant>): Combatant[] {
   const out: Combatant[] = [];
   for (const raw of ids) {
     const m = /^(.+?)\s*[x*]\s*(\d+)$/.exec(raw.trim());

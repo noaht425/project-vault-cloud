@@ -34,13 +34,13 @@ function isLeveledSpell(a: Action): boolean {
 }
 
 /** mark a combatant's per-turn action economy after it takes `a` */
-function markEconomy(u: CombatantState, a: Action): void {
+export function markEconomy(u: CombatantState, a: Action): void {
   if ((a.cost.action ?? 0) > 0) u.actionUsedThisTurn = true;
   if ((a.cost.bonus ?? 0) > 0) u.bonusUsedThisTurn = true;
   if (isLeveledSpell(a)) u.leveledSpellThisTurn = true;
 }
 
-function actionAvailable(state: CombatState, u: CombatantState, a: Action): boolean {
+export function actionAvailable(state: CombatState, u: CombatantState, a: Action): boolean {
   if (a.limitedUse && (u.resources.get(a.limitedUse.resource) ?? 0) < a.limitedUse.amount) return false;
   if (a.recharge.startsWith("roll:")) {
     const res = a.limitedUse?.resource;
@@ -64,14 +64,14 @@ function actionAvailable(state: CombatState, u: CombatantState, a: Action): bool
   return true;
 }
 
-function spend(u: CombatantState, a: Action): void {
+export function spend(u: CombatantState, a: Action): void {
   if (a.limitedUse) {
     const cur = u.resources.get(a.limitedUse.resource) ?? 0;
     u.resources.set(a.limitedUse.resource, cur - a.limitedUse.amount);
   }
 }
 
-function pick(state: CombatState, u: CombatantState, ids: string[]): Action | undefined {
+export function pick(state: CombatState, u: CombatantState, ids: string[]): Action | undefined {
   for (const id of ids) {
     const a = u.ref.actions.find((x) => x.id === id);
     if (a && actionAvailable(state, u, a)) return a;
@@ -84,7 +84,7 @@ function candidateActions(state: CombatState, u: CombatantState): Action[] {
   return u.ref.actions.filter((a) => (a.cost.action ?? 0) > 0 && actionAvailable(state, u, a));
 }
 
-function chooseBest(state: CombatState, u: CombatantState): Action | undefined {
+export function chooseBest(state: CombatState, u: CombatantState): Action | undefined {
   const cands = candidateActions(state, u);
   if (!cands.length) return undefined;
   let best: Action | undefined;

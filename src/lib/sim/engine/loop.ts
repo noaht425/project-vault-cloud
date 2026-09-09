@@ -177,7 +177,7 @@ export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatS
 
 // ---------------------------------------------------------------- turn phases
 
-function startOfTurn(state: CombatState, u: CombatantState): void {
+export function startOfTurn(state: CombatState, u: CombatantState): void {
   // effect ticks (DoT: Burning, charm-song, molten ground, ...)
   for (const e of [...u.effects]) {
     if (e.tick && e.tick.length) {
@@ -223,7 +223,7 @@ function startOfTurn(state: CombatState, u: CombatantState): void {
   }
 }
 
-function endOfTurn(state: CombatState, u: CombatantState): void {
+export function endOfTurn(state: CombatState, u: CombatantState): void {
   for (const e of [...u.effects]) {
     if (e.saveEnds && e.saveEnds.at === "endOfTurn") trySaveEnds(state, u, e.name);
     if (state.round > e.expiresRound) u.effects = u.effects.filter((x) => x !== e);
@@ -265,7 +265,7 @@ function trySaveEndsCondition(state: CombatState, u: CombatantState, name: strin
   }
 }
 
-function rollDeathSave(state: CombatState, u: CombatantState): void {
+export function rollDeathSave(state: CombatState, u: CombatantState): void {
   if (u.stable) return; // stabilised: unconscious at 0 HP, no more death saves until healed
   const r = state.rng.d20();
   if (r === 20) { u.downed = false; u.stable = false; u.hp = 1; u.deathSaves = { success: 0, fail: 0 }; say(state, `${u.name} rallies (1 HP)`, u.id); return; }
@@ -290,7 +290,7 @@ function cullRevertedMinions(state: CombatState): void {
   }
 }
 
-function checkEnd(state: CombatState): void {
+export function checkEnd(state: CombatState): void {
   cullRevertedMinions(state);
   const monstersUp = [...state.units.values()].some((u) => u.side === "monster" && u.alive);
   const partyUp = [...state.units.values()].some((u) => u.side === "party" && u.alive && !u.downed);

@@ -85,6 +85,8 @@ export function rollAttack(
   toHit: number,
   intrinsicAdv: AdvMode | undefined,
   critRange = 20,
+  /** battle mode: cover AC bonus (+2 half / +5 three-quarters) folded into the target's AC */
+  extraTargetAc = 0,
 ): AttackResult {
   // the attacker rolls at disadvantage while frightened / poisoned / prone /
   // restrained / blinded (all impose disadvantage on attack rolls in 5e)
@@ -129,7 +131,7 @@ export function rollAttack(
   }
 
   const { used } = state.rng.d20mode(adv);
-  let ac = effectiveAc(target);
+  let ac = effectiveAc(target) + extraTargetAc;
   const hits = (f: number) => f >= critRange || f + toHit >= ac;
   const face = precogSwap(state, attacker, used, used !== 1 && hits(used), hits);
   const crit = face >= critRange;
@@ -139,7 +141,7 @@ export function rollAttack(
   if (!state.inReaction && !autoMiss) {
     const rr = reactToIncomingAttack(state, { target, hitMargin: face + toHit - ac, crit });
     if (rr.negated) return { hit: false, crit: false, hadAdvantage: adv === "adv", nat: face };
-    if (rr.shielded) ac = effectiveAc(target); // the +5 Shield effect is now active
+    if (rr.shielded) ac = effectiveAc(target) + extraTargetAc; // the +5 Shield effect is now active
   }
 
   const hit = !autoMiss && (crit || face + toHit >= ac);
