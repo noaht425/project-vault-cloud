@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { loadCustomMonsters, exportCustomMonsters } from "../src/lib/sim/ui";
+import {
+  loadCustomMonsters,
+  exportCustomMonsters,
+  draftToCombatant,
+  emptyDraft,
+  suggestedPb,
+} from "../src/lib/sim/ui";
 import { runScenarioOnce, runScenario, standardParty } from "../src/lib/sim/engine/scenario";
 import { parseCombatant, type Combatant } from "../src/lib/sim/schema";
 
@@ -103,5 +109,64 @@ describe("custom monster loading", () => {
     const mc = runScenario({ party: standardParty(10), enemies: ["custom-brute"], trials: 60, extraById });
     expect(mc.partyWinRate).toBeGreaterThanOrEqual(0);
     expect(mc.partyWinRate).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('"make a monster" builder', () => {
+  it("suggestedPb follows the DMG CR table", () => {
+    expect(suggestedPb("2")).toBe(2);
+    expect(suggestedPb("10")).toBe(4);
+    expect(suggestedPb("17")).toBe(6);
+    expect(suggestedPb("30")).toBe(9);
+    expect(suggestedPb("1/2")).toBe(2);
+  });
+
+  it("assembles the default draft into a schema-valid, fightable combatant", () => {
+    const draft = { ...emptyDraft(), name: "Test Golem" };
+    const { combatant, error, warnings } = draftToCombatant(draft);
+    expect(error).toBeUndefined();
+    expect(warnings).toEqual([]);
+    expect(combatant!.name).toBe("Test Golem");
+    expect(combatant!.id).toMatch(/^test-golem-[a-z0-9]{4}$/);
+    // 2× Strike ⇒ a multiattack plus the Strike action
+    expect(combatant!.actions.map((a) => a.id)).toContain("multiattack");
+    expect(combatant!.actions.map((a) => a.id)).toContain("strike");
+
+    const extraById = { [combatant!.id]: combatant! };
+    const { result } = runScenarioOnce({ party: standardParty(10), enemies: [combatant!.id], seed: 1, extraById });
+    expect(["party", "monster", "draw"]).toContain(result.winner);
+  });
+
+  it("carries an AoE, defenses and legendary actions through", () => {
+    const draft = {
+      ...emptyDraft(),
+      name: "Cinder Wyrm",
+      cr: "13",
+      attacks: [{ name: "Bite", toHit: 12, dice: "2d10+7", type: "piercing" as const, count: 1 }],
+      aoe: { name: "Fire Breath", shape: "cone" as const, size: 30, ability: "dex" as const, dc: 18, dice: "12d6", type: "fire" as const, recharge: "roll:5-6" as const },
+      damage: { ...emptyDraft().damage, fire: "immune" as const, cold: "vuln" as const },
+      legendary: true,
+      legendaryBudget: 3,
+      legendaryAttacks: ["Bite"],
+    };
+    const { combatant, error } = draftToCombatant(draft);
+    expect(error).toBeUndefined();
+    expect(combatant!.immunities).toContain("fire");
+    expect(combatant!.vulnerabilities).toContain("cold");
+    expect(combatant!.actions.find((a) => a.id === "area")?.recharge).toBe("roll:5-6");
+    expect(combatant!.legendaryActions?.budget).toBe(3);
+    expect(combatant!.legendaryActions?.options.map((o) => o.action)).toEqual(["bite"]);
+  });
+
+  it("rejects an empty name or a monster with nothing to do", () => {
+    expect(draftToCombatant({ ...emptyDraft(), name: "" }).error).toMatch(/name/i);
+    expect(draftToCombatant({ ...emptyDraft(), name: "Blob", attacks: [], aoe: null }).error).toMatch(/attack|area/i);
+  });
+
+  it("a builder monster round-trips through export / load", () => {
+    const { combatant } = draftToCombatant({ ...emptyDraft(), name: "Round Trip" });
+    const back = loadCustomMonsters(exportCustomMonsters([combatant!]));
+    expect(back.errors).toEqual([]);
+    expect(back.monsters[0].name).toBe("Round Trip");
   });
 });

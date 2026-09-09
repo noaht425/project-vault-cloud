@@ -60,7 +60,9 @@ export const exprSchema = z.string().min(1);
 export const advModeSchema = z.enum(["adv", "dis", "flat"]);
 export type AdvMode = z.infer<typeof advModeSchema>;
 
-export const sizeSchema = z.enum(["tiny", "small", "medium", "large", "huge", "gargantuan"]);
+export const SIZES = ["tiny", "small", "medium", "large", "huge", "gargantuan"] as const;
+export const sizeSchema = z.enum(SIZES);
+export type Size = (typeof SIZES)[number];
 
 // ------------------------------- targeting ---------------------------------
 

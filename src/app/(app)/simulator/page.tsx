@@ -3,16 +3,26 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import {
+  ABILITIES,
+  BUILDER_CONDITIONS,
   classToTemplate,
+  DAMAGE_TYPES,
   defaultSetup,
+  draftToCombatant,
+  emptyDraft,
   exportCustomMonsters,
   loadCustomMonsters,
   loadoutSummary,
   monsterOptions,
+  SIZES,
   standardParty,
+  suggestedPb,
   SWEEP_DIMS,
   TEMPLATE_IDS,
+  type BuilderDraft,
   type Combatant,
+  type DamageType,
+  type DmgDefense,
   type MonsterOption,
   type SimResult,
   type SimSetup,
@@ -197,8 +207,15 @@ function EnemyEditor({
 }) {
   const [pick, setPick] = useState("");
   const [customMsg, setCustomMsg] = useState<string | null>(null);
+  const [showBuilder, setShowBuilder] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const byId = useMemo(() => Object.fromEntries(options.map((o) => [o.id, o])), [options]);
+
+  const addCustom = (c: Combatant) => {
+    onCustomChange([...customMonsters.filter((m) => m.id !== c.id), c]);
+    setCustomMsg(`Added “${c.name}” to the custom list.`);
+    setShowBuilder(false);
+  };
 
   const add = () => {
     if (!pick) return;
@@ -250,6 +267,12 @@ function EnemyEditor({
         <button className="text-xs text-accent hover:underline" onClick={() => fileRef.current?.click()}>
           load monsters (JSON)
         </button>
+        <button
+          className={`text-xs hover:underline ${showBuilder ? "text-normal" : "text-accent"}`}
+          onClick={() => setShowBuilder((v) => !v)}
+        >
+          {showBuilder ? "close builder" : "make a monster"}
+        </button>
         {customMonsters.length > 0 && (
           <>
             <span className="text-xs text-muted">{customMonsters.length} custom loaded</span>
@@ -269,6 +292,7 @@ function EnemyEditor({
         )}
       </div>
       {customMsg && <p className="text-xs text-muted">{customMsg}</p>}
+      {showBuilder && <MonsterBuilder onSave={addCustom} onCancel={() => setShowBuilder(false)} />}
       <div className="flex gap-2 flex-wrap">
         <select value={pick} onChange={(e) => setPick(e.target.value)} className="min-w-52">
           <option value="">Add a monster…</option>
@@ -327,6 +351,268 @@ function EnemyEditor({
         </ul>
       )}
     </section>
+  );
+}
+
+// ---------------------------------------------------------- make a monster
+
+const DMG_TONE: Record<DmgDefense, string> = {
+  none: "text-muted border-border",
+  resist: "text-warning border-warning/50",
+  immune: "text-positive border-positive/50",
+  vuln: "text-danger border-danger/50",
+};
+
+function MonsterBuilder({ onSave, onCancel }: { onSave: (c: Combatant) => void; onCancel: () => void }) {
+  const [draft, setDraft] = useState<BuilderDraft>(emptyDraft);
+  const set = (p: Partial<BuilderDraft>) => setDraft((d) => ({ ...d, ...p }));
+  const result = useMemo(() => draftToCombatant(draft), [draft]);
+
+  const patchAttack = (i: number, p: Partial<BuilderDraft["attacks"][number]>) =>
+    set({ attacks: draft.attacks.map((x, xi) => (xi === i ? { ...x, ...p } : x)) });
+  const cycleDmg = (t: DamageType) => {
+    const order: DmgDefense[] = ["none", "resist", "immune", "vuln"];
+    set({ damage: { ...draft.damage, [t]: order[(order.indexOf(draft.damage[t]) + 1) % 4] } });
+  };
+  const toggle = <T,>(arr: T[], v: T): T[] => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
+
+  return (
+    <div className="bg-panel border border-border rounded p-3 flex flex-col gap-3 text-sm">
+      <div className="flex items-baseline justify-between">
+        <span className="font-medium">Make a monster</span>
+        <span className="text-xs text-muted">attacks + one breath + defenses — the fight-math essentials</span>
+      </div>
+
+      {/* identity + defense */}
+      <div className="flex flex-wrap gap-x-4 gap-y-2 items-end">
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">Name</span>
+          <input className="w-44" value={draft.name} onChange={(e) => set({ name: e.target.value })} placeholder="Homebrew Horror" />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">CR</span>
+          <input className="w-14" value={draft.cr} onChange={(e) => set({ cr: e.target.value, pb: suggestedPb(e.target.value) })} />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">Size</span>
+          <select value={draft.size} onChange={(e) => set({ size: e.target.value as BuilderDraft["size"] })}>
+            {SIZES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">AC</span>
+          <input type="number" className="w-14" value={draft.ac} onChange={(e) => set({ ac: Number(e.target.value) || 0 })} />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">HP (dice or number)</span>
+          <input className="w-32" value={draft.hp} onChange={(e) => set({ hp: e.target.value })} placeholder="18d12+108" />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted">PB</span>
+          <input type="number" className="w-12" value={draft.pb} onChange={(e) => set({ pb: Number(e.target.value) || 1 })} />
+        </label>
+      </div>
+
+      {/* abilities */}
+      <div className="flex flex-wrap gap-2">
+        {ABILITIES.map((ab) => (
+          <label key={ab} className="flex flex-col items-center">
+            <span className="text-[10px] uppercase text-muted">{ab}</span>
+            <input
+              type="number"
+              className="w-12 text-center"
+              value={draft.abilities[ab]}
+              onChange={(e) => set({ abilities: { ...draft.abilities, [ab]: Number(e.target.value) || 0 } })}
+            />
+            <button
+              type="button"
+              className={`text-[10px] mt-0.5 px-1 rounded border ${draft.proficientSaves.includes(ab) ? "border-accent text-accent" : "border-border text-muted"}`}
+              onClick={() => set({ proficientSaves: toggle(draft.proficientSaves, ab) })}
+            >
+              save
+            </button>
+          </label>
+        ))}
+      </div>
+
+      {/* damage defenses — click a type to cycle none → resist → immune → vuln */}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-muted">Damage (click: resist / immune / vuln)</span>
+        <div className="flex flex-wrap gap-1">
+          {DAMAGE_TYPES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`text-[11px] px-1.5 py-0.5 rounded border ${DMG_TONE[draft.damage[t]]}`}
+              onClick={() => cycleDmg(t)}
+            >
+              {t}
+              {draft.damage[t] !== "none" && ` ·${draft.damage[t][0]}`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* condition immunities */}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-muted">Condition immunities</span>
+        <div className="flex flex-wrap gap-1">
+          {BUILDER_CONDITIONS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`text-[11px] px-1.5 py-0.5 rounded border ${draft.conditionImmunities.includes(c) ? "border-positive/50 text-positive" : "border-border text-muted"}`}
+              onClick={() => set({ conditionImmunities: toggle(draft.conditionImmunities, c) })}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* attacks */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs text-muted">Attacks (a Multiattack is generated automatically)</span>
+        {draft.attacks.map((a, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-1.5">
+            <input className="w-28" value={a.name} onChange={(e) => patchAttack(i, { name: e.target.value })} placeholder="Claw" />
+            <span className="text-xs text-muted">+</span>
+            <input type="number" className="w-12" value={a.toHit} onChange={(e) => patchAttack(i, { toHit: Number(e.target.value) || 0 })} />
+            <input className="w-24" value={a.dice} onChange={(e) => patchAttack(i, { dice: e.target.value })} placeholder="2d6+4" />
+            <select value={a.type} onChange={(e) => patchAttack(i, { type: e.target.value as DamageType })}>
+              {DAMAGE_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <Stepper value={a.count} min={1} max={5} onChange={(count) => patchAttack(i, { count })} suffix="×" />
+            <button
+              className="text-muted hover:text-danger px-1"
+              onClick={() => set({ attacks: draft.attacks.filter((_, xi) => xi !== i) })}
+              aria-label="Remove attack"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        {draft.attacks.length < 6 && (
+          <button
+            className="text-xs text-accent hover:underline self-start"
+            onClick={() => set({ attacks: [...draft.attacks, { name: "", toHit: draft.pb + 3, dice: "1d8+3", type: "bludgeoning", count: 1 }] })}
+          >
+            + add attack
+          </button>
+        )}
+      </div>
+
+      {/* breath / area */}
+      {draft.aoe ? (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">Breath / area effect</span>
+            <button className="text-xs text-muted hover:text-danger" onClick={() => set({ aoe: null })}>
+              remove
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input className="w-28" value={draft.aoe.name} onChange={(e) => set({ aoe: { ...draft.aoe!, name: e.target.value } })} placeholder="Fire Breath" />
+            <select value={draft.aoe.shape} onChange={(e) => set({ aoe: { ...draft.aoe!, shape: e.target.value as "cone" } })}>
+              {["cone", "line", "sphere", "emanation"].map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <input type="number" className="w-14" value={draft.aoe.size} onChange={(e) => set({ aoe: { ...draft.aoe!, size: Number(e.target.value) || 0 } })} />
+            <span className="text-xs text-muted">ft ·</span>
+            <select value={draft.aoe.ability} onChange={(e) => set({ aoe: { ...draft.aoe!, ability: e.target.value as "dex" } })}>
+              {ABILITIES.map((ab) => (
+                <option key={ab} value={ab}>{ab}</option>
+              ))}
+            </select>
+            <span className="text-xs text-muted">DC</span>
+            <input type="number" className="w-12" value={draft.aoe.dc} onChange={(e) => set({ aoe: { ...draft.aoe!, dc: Number(e.target.value) || 0 } })} />
+            <input className="w-24" value={draft.aoe.dice} onChange={(e) => set({ aoe: { ...draft.aoe!, dice: e.target.value } })} placeholder="12d6" />
+            <select value={draft.aoe.type} onChange={(e) => set({ aoe: { ...draft.aoe!, type: e.target.value as DamageType } })}>
+              {DAMAGE_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <select value={draft.aoe.recharge} onChange={(e) => set({ aoe: { ...draft.aoe!, recharge: e.target.value as "none" } })}>
+              <option value="none">at will</option>
+              <option value="roll:5-6">Recharge 5–6</option>
+              <option value="roll:4-6">Recharge 4–6</option>
+            </select>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="text-xs text-accent hover:underline self-start"
+          onClick={() => set({ aoe: { name: "Breath", shape: "cone", size: 30, ability: "dex", dc: 10 + draft.pb + Math.floor((draft.abilities.con - 10) / 2), dice: "10d6", type: "fire", recharge: "roll:5-6" } })}
+        >
+          + breath / area effect
+        </button>
+      )}
+
+      {/* legendary + ai */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-2 text-xs">
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={draft.legendary} onChange={(e) => set({ legendary: e.target.checked })} />
+          Legendary actions
+        </label>
+        {draft.legendary && (
+          <>
+            <span className="flex items-center gap-1">
+              budget
+              <Stepper value={draft.legendaryBudget} min={1} max={5} onChange={(legendaryBudget) => set({ legendaryBudget })} />
+            </span>
+            {draft.attacks.filter((a) => a.name.trim()).map((a) => (
+              <button
+                key={a.name}
+                type="button"
+                className={`px-1.5 py-0.5 rounded border ${draft.legendaryAttacks.includes(a.name) ? "border-accent text-accent" : "border-border text-muted"}`}
+                onClick={() => set({ legendaryAttacks: toggle(draft.legendaryAttacks, a.name) })}
+              >
+                {a.name}
+              </button>
+            ))}
+          </>
+        )}
+        <label className="flex items-center gap-1.5">
+          targets
+          <select
+            value={draft.ai.targetPriority}
+            onChange={(e) => set({ ai: { ...draft.ai, targetPriority: e.target.value as BuilderDraft["ai"]["targetPriority"] } })}
+          >
+            <option value="highestThreat">highest threat</option>
+            <option value="squishiest">squishiest</option>
+            <option value="lowestHp">lowest HP</option>
+            <option value="nearest">nearest</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={draft.ai.keepDistance} onChange={(e) => set({ ai: { ...draft.ai, keepDistance: e.target.checked } })} />
+          ranged / kites
+        </label>
+      </div>
+
+      {/* footer */}
+      <div className="flex items-center gap-3 flex-wrap border-t border-border pt-2">
+        {result.error ? (
+          <span className="text-xs text-danger">{result.error}</span>
+        ) : result.warnings.length ? (
+          <span className="text-xs text-warning">saves with warnings: {result.warnings.slice(0, 2).join("; ")}</span>
+        ) : (
+          <span className="text-xs text-positive">✓ valid stat block</span>
+        )}
+        <span className="flex-1" />
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!result.combatant} onClick={() => result.combatant && onSave(result.combatant)}>
+          Save to custom list
+        </Button>
+      </div>
+    </div>
   );
 }
 

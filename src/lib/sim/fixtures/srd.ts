@@ -213,6 +213,7 @@ export const youngGoldDragon = srd({
   pb: 4,
   proficientSaves: ["dex", "con", "wis", "cha"],
   immunities: ["fire"],
+  resources: { breath: { max: 1, recharge: "roll:5-6" } },
   ai: {
     targetPriority: "highestThreat",
     aoeMinTargets: 2,
@@ -255,6 +256,7 @@ export const youngGoldDragon = srd({
       name: "Fire Breath",
       cost: { action: 1 },
       recharge: "roll:5-6",
+      limitedUse: { resource: "breath", amount: 1 },
       automation: [
         {
           type: "target",
@@ -290,6 +292,7 @@ export const adultRedDragon = srd({
   proficientSaves: ["dex", "con", "wis", "cha"],
   immunities: ["fire"],
   specialRules: [{ rule: "legendaryResistance", perDay: 3 }],
+  resources: { breath: { max: 1, recharge: "roll:5-6" } },
   ai: {
     targetPriority: "highestThreat",
     aoeMinTargets: 2,
@@ -340,6 +343,7 @@ export const adultRedDragon = srd({
       name: "Fire Breath",
       cost: { action: 1 },
       recharge: "roll:5-6",
+      limitedUse: { resource: "breath", amount: 1 },
       automation: [
         {
           type: "target",
