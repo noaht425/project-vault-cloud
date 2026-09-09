@@ -5,6 +5,7 @@ import type { Combatant } from "../schema";
 import { FIXTURES_BY_ID } from "../fixtures";
 import { MINIONS } from "./minions";
 import { applyLoadout, makeTemplate, type Loadout } from "./templates";
+import { applyRace, applyFeats, applyItems } from "./pc-extras";
 import { runCombat, summarise, type CombatResult, type RunOptions } from "./loop";
 import { monteCarlo, type MonteCarloResult } from "./montecarlo";
 import { sweep, type SweepDimension, type SweepResult } from "./sweep";
@@ -13,9 +14,13 @@ export interface PartyMemberSpec {
   template: string; // a TEMPLATE_ID
   name?: string;
   level: number;
-  loadout?: Loadout; // feats / magic items
+  loadout?: Loadout; // feats / magic items (numeric knobs)
   /** a fully-built PC (e.g. imported from a PC note) — used as-is; `template` is ignored */
   combatant?: Combatant;
+  /** picker overlays applied on top of `combatant`/`template` in "picker" mode */
+  race?: string;
+  feats?: string[];
+  items?: string[];
 }
 
 const isPaladin = (p: Combatant): boolean => p.templateId === "vengeance-paladin" || p.templateId === "paladin";
@@ -27,6 +32,10 @@ export function buildParty(specs: PartyMemberSpec[]): Combatant[] {
       ? { ...s.combatant, name: s.name ?? s.combatant.name, id: `pc-${i + 1}-${s.combatant.templateId ?? "pc"}` }
       : { ...makeTemplate(s.template, s.level, s.name), id: `pc-${i + 1}-${s.template}` };
     if (s.loadout) c = { ...applyLoadout(c, s.loadout), id: c.id, name: c.name };
+    // per-PC picker overlays: race traits, feats, magic items
+    if (s.race) c = applyRace(c, s.race, s.level).c;
+    if (s.feats?.length) c = applyFeats(c, s.feats.join("\n"), s.level, "picker").c;
+    if (s.items?.length) c = applyItems(c, s.items.join("\n"), "picker").c;
     return c;
   });
 

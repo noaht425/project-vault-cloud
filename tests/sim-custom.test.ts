@@ -614,6 +614,30 @@ describe("racial traits, feats, and magic items", () => {
     expect(nums(rod, DC)).toEqual(dcBefore.map((n) => n + 2));
   });
 
+  // --- the per-PC picker (buildParty, "picker" mode) ---
+  it("buildParty applies race / feats / items picks onto a template PC", () => {
+    const [plain] = buildParty([{ template: "gwm-fighter", level: 12, name: "P" }]);
+    const [kitted] = buildParty([
+      { template: "gwm-fighter", level: 12, name: "P", race: "Dragonborn (Red)", feats: ["Polearm Master", "Alert"], items: ["+2 weapon", "+1 armor", "Cloak of Protection"] },
+    ]);
+    // race: a breath weapon action + fire resistance
+    expect(kitted.actions.some((a) => a.id === "breath-weapon")).toBe(true);
+    expect(kitted.resistances).toContain("fire");
+    // feat: Alert -> cannotBeSurprised; PAM -> one more swing than plain
+    expect(kitted.specialRules.some((r) => r.rule === "cannotBeSurprised")).toBe(true);
+    const nSw = (c: Combatant) => ((c.actions.find((a) => a.id === "attack")!.automation[0] as { effects: { type: string }[] }).effects).filter((e) => e.type === "attack").length;
+    expect(nSw(kitted)).toBe(nSw(plain) + 1);
+    // item: picker mode DOES move AC — +1 armour and Cloak of Protection (+1) — and saves (Cloak +1)
+    expect(kitted.ac).toBe(plain.ac + 2);
+    expect(kitted.saveBonusAll).toBe(plain.saveBonusAll + 1);
+  });
+
+  it("picker items and the legacy numeric loadout stack", () => {
+    const [c] = buildParty([{ template: "gwm-fighter", level: 12, name: "P", loadout: { acItem: 1 }, items: ["+1 armor"] }]);
+    const [plain] = buildParty([{ template: "gwm-fighter", level: 12, name: "P" }]);
+    expect(c.ac).toBe(plain.ac + 2);
+  });
+
   it("a PC with a race, a feat, and an item still fights", () => {
     const r = pcNoteToCombatant(
       pc({

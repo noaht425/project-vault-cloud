@@ -10,9 +10,12 @@ import {
   draftToCombatant,
   emptyDraft,
   exportCustomMonsters,
+  FEAT_OPTIONS,
+  ITEM_OPTIONS,
   loadCustomMonsters,
   loadoutSummary,
   monsterOptions,
+  RACE_OPTIONS,
   npcNoteToMonster,
   parseStatblock,
   pcNoteToCombatant,
@@ -839,6 +842,11 @@ function PartyEditor({
     for (const k of Object.keys(next) as (keyof typeof next)[]) if (!next[k]) delete next[k];
     patch(i, { loadout: Object.keys(next).length ? next : undefined });
   };
+  const togglePick = (i: number, key: "feats" | "items", val: string) => {
+    const cur = party[i][key] ?? [];
+    const next = cur.includes(val) ? cur.filter((x) => x !== val) : [...cur, val];
+    patch(i, { [key]: next.length ? next : undefined });
+  };
 
   return (
     <section className="flex flex-col gap-2">
@@ -917,9 +925,19 @@ function PartyEditor({
                   })
                 }
                 aria-label="Loadout"
-                title="feats & magic items"
+                title="race, feats & magic items"
               >
-                ⚙{loadoutSummary(p.loadout) && <span className="ml-1 opacity-70">{loadoutSummary(p.loadout)}</span>}
+                ⚙
+                {(() => {
+                  const bits = [
+                    loadoutSummary(p.loadout),
+                    p.race,
+                    (p.feats?.length ?? 0) + (p.items?.length ?? 0) > 0
+                      ? `${(p.feats?.length ?? 0) + (p.items?.length ?? 0)} pick${(p.feats?.length ?? 0) + (p.items?.length ?? 0) === 1 ? "" : "s"}`
+                      : "",
+                  ].filter(Boolean);
+                  return bits.length ? <span className="ml-1 opacity-70">{bits.join(" · ")}</span> : null;
+                })()}
               </button>
               <button
                 className="text-muted hover:text-danger px-1"
@@ -931,18 +949,33 @@ function PartyEditor({
               </button>
             </div>
             {open.has(i) && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 pb-3 pt-1 text-xs border-t border-border">
-                <LoadoutStepper label="Weapon +" value={p.loadout?.weaponBonus ?? 0} onChange={(weaponBonus) => patchLoadout(i, { weaponBonus: (weaponBonus || undefined) as 1 | 2 | 3 | undefined })} />
-                <LoadoutStepper label="AC +" value={p.loadout?.acItem ?? 0} onChange={(acItem) => patchLoadout(i, { acItem: (acItem || undefined) as 1 | 2 | 3 | undefined })} />
-                <LoadoutStepper label="Saves +" value={p.loadout?.saveItem ?? 0} onChange={(saveItem) => patchLoadout(i, { saveItem: (saveItem || undefined) as 1 | 2 | 3 | undefined })} />
-                <label className="flex items-center gap-1.5">
-                  <input type="checkbox" checked={!!p.loadout?.resilientCon} onChange={(e) => patchLoadout(i, { resilientCon: e.target.checked || undefined })} />
-                  Resilient (Con)
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <input type="checkbox" checked={!!p.loadout?.toughHp} onChange={(e) => patchLoadout(i, { toughHp: e.target.checked || undefined })} />
-                  Tough (+2 HP/lvl)
-                </label>
+              <div className="flex flex-col gap-2 px-3 pb-3 pt-1 text-xs border-t border-border">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <LoadoutStepper label="Weapon +" value={p.loadout?.weaponBonus ?? 0} onChange={(weaponBonus) => patchLoadout(i, { weaponBonus: (weaponBonus || undefined) as 1 | 2 | 3 | undefined })} />
+                  <LoadoutStepper label="AC +" value={p.loadout?.acItem ?? 0} onChange={(acItem) => patchLoadout(i, { acItem: (acItem || undefined) as 1 | 2 | 3 | undefined })} />
+                  <LoadoutStepper label="Saves +" value={p.loadout?.saveItem ?? 0} onChange={(saveItem) => patchLoadout(i, { saveItem: (saveItem || undefined) as 1 | 2 | 3 | undefined })} />
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={!!p.loadout?.resilientCon} onChange={(e) => patchLoadout(i, { resilientCon: e.target.checked || undefined })} />
+                    Resilient (Con)
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={!!p.loadout?.toughHp} onChange={(e) => patchLoadout(i, { toughHp: e.target.checked || undefined })} />
+                    Tough (+2 HP/lvl)
+                  </label>
+                </div>
+                <div className="flex flex-wrap items-start gap-x-5 gap-y-2 pt-1.5 border-t border-border/60">
+                  <label className="flex items-center gap-1.5">
+                    <span className="text-muted">Race</span>
+                    <select className="text-xs" value={p.race ?? ""} onChange={(e) => patch(i, { race: e.target.value || undefined })}>
+                      <option value="">—</option>
+                      {RACE_OPTIONS.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <PickList label="Feats" options={FEAT_OPTIONS} chosen={p.feats ?? []} onToggle={(v) => togglePick(i, "feats", v)} />
+                  <PickList label="Items" options={ITEM_OPTIONS} chosen={p.items ?? []} onToggle={(v) => togglePick(i, "items", v)} />
+                </div>
               </div>
             )}
           </li>
@@ -1187,6 +1220,50 @@ function LoadoutStepper({
       <span className="text-muted">{label}</span>
       <Stepper value={value} min={0} max={3} onChange={onChange} />
     </span>
+  );
+}
+
+/** Label + removable chips + an "add" dropdown, for feats / magic items. */
+function PickList({
+  label,
+  options,
+  chosen,
+  onToggle,
+}: {
+  label: string;
+  options: string[];
+  chosen: string[];
+  onToggle: (v: string) => void;
+}) {
+  const available = options.filter((o) => !chosen.includes(o));
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap max-w-[26rem]">
+      <span className="text-muted">{label}</span>
+      {chosen.map((c) => (
+        <button
+          key={c}
+          className="px-1.5 py-0.5 rounded bg-hover hover:bg-active text-normal flex items-center gap-1"
+          onClick={() => onToggle(c)}
+          title="remove"
+        >
+          {c} <span className="opacity-60">✕</span>
+        </button>
+      ))}
+      {available.length > 0 && (
+        <select
+          className="text-xs"
+          value=""
+          onChange={(e) => {
+            if (e.target.value) onToggle(e.target.value);
+          }}
+        >
+          <option value="">+ add</option>
+          {available.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+      )}
+    </div>
   );
 }
 
