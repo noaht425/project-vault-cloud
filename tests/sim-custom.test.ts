@@ -10,6 +10,9 @@ import {
   npcNoteToMonster,
   pcNoteToCombatant,
   parseClassRefFeatures,
+  applyRace,
+  applyFeats,
+  applyItems,
 } from "../src/lib/sim/ui";
 import { runScenarioOnce, runScenario, standardParty, buildParty } from "../src/lib/sim/engine/scenario";
 import { parseCombatant, type Combatant } from "../src/lib/sim/schema";
@@ -468,6 +471,163 @@ You summon a primal beast that acts on your turn. You can command it to take the
     const { result, log } = runScenarioOnce({ party: [{ template: "x", level: 13, combatant: c, name: "Subj" }], enemies: ["gladiator"], seed: 3 });
     expect(log.some((l) => /raises 1× Primal Companion/.test(l))).toBe(true);
     expect(log.some((l) => /Primal Companion 1 uses/.test(l))).toBe(true);
+    expect(["party", "monster", "draw"]).toContain(result.winner);
+  });
+});
+
+describe("racial traits, feats, and magic items", () => {
+  const pc = (over: Record<string, unknown>): Parameters<typeof pcNoteToCombatant>[0] => ({
+    title: String(over.name ?? "PC"),
+    body: String(over.body ?? ""),
+    frontmatter: {
+      type: "pc",
+      class: String(over.class ?? "Fighter"),
+      level: Number(over.level ?? 12),
+      ac: 18,
+      maxHp: 110,
+      stats: { str: 18, dex: 12, con: 16, int: 10, wis: 12, cha: 10 },
+      ...over,
+    },
+  });
+  const swings = (c: { actions: { id: string; automation: unknown[] }[] }) =>
+    ((c.actions.find((a) => a.id === "attack")!.automation[0] as { effects: { type: string; bonus: number; onHit: { type: string; amount: string; damageType: string }[] }[] }).effects).filter(
+      (e) => e.type === "attack",
+    );
+  const fighter = (level = 12): Combatant => pcNoteToCombatant(pc({ class: "Fighter", level })).spec!.combatant;
+
+  // --- racial traits ---
+  it("applyRace: a dragonborn gains a scaling breath weapon + damage resistance", () => {
+    const lo = applyRace(fighter(4), "Gold Dragonborn", 4);
+    const hi = applyRace(fighter(16), "Gold Dragonborn", 16);
+    const bw = lo.c.actions.find((a) => a.id === "breath-weapon")!;
+    expect(bw).toBeDefined();
+    expect(bw.limitedUse?.resource).toBe("breath_weapon");
+    const dmgLo = ((bw.automation[0] as { effects: { onFail: { amount: string }[] }[] }).effects[0].onFail[0]).amount;
+    const dmgHi = ((hi.c.actions.find((a) => a.id === "breath-weapon")!.automation[0] as { effects: { onFail: { amount: string }[] }[] }).effects[0].onFail[0]).amount;
+    expect(dmgLo).toBe("2d6");
+    expect(dmgHi).toBe("5d6");
+    expect(lo.c.resistances).toContain("fire");
+    expect(lo.c.ai.opener).toContain("breath-weapon");
+  });
+
+  it("applyRace: a half-orc gets Relentless Endurance (undyingReturn)", () => {
+    const { c, notes } = applyRace(fighter(), "Half-Orc", 12);
+    expect(c.specialRules.some((r) => r.rule === "undyingReturn")).toBe(true);
+    expect(notes.join(" ")).toMatch(/Relentless Endurance/);
+  });
+
+  it("pcNoteToCombatant reads frontmatter.race", () => {
+    const r = pcNoteToCombatant(pc({ name: "Rhogar", class: "Fighter", level: 10, race: "Red Dragonborn" }));
+    expect(r.spec!.combatant.actions.some((a) => a.id === "breath-weapon")).toBe(true);
+    expect(r.warnings.join(" ")).toMatch(/race: Dragonborn/);
+  });
+
+  // --- feats ---
+  it("applyFeats: Great Weapon Master is −5 to hit / +10 damage on every swing", () => {
+    const base = fighter();
+    const before = swings(base);
+    const { c } = applyFeats(base, "Great Weapon Master", 12, "picker");
+    const after = swings(c);
+    expect(after[0].bonus).toBe(before[0].bonus - 5);
+    expect(after[0].onHit.some((h) => h.type === "damage" && h.amount === "10")).toBe(true);
+  });
+
+  it("GWM comes through a note's ## Feats section", () => {
+    const r = pcNoteToCombatant(pc({ class: "Fighter", level: 12, body: "## Feats\n- Great Weapon Master\n- Alert\n" }));
+    const c = r.spec!.combatant;
+    expect(swings(c)[0].onHit.some((h) => h.amount === "10")).toBe(true);
+    expect(c.specialRules.some((x) => x.rule === "cannotBeSurprised")).toBe(true);
+    expect(r.warnings.join(" ")).toMatch(/feat: Great Weapon Master/);
+  });
+
+  it("Polearm Master adds one bonus-action 1d4 swing", () => {
+    const base = fighter();
+    const n = swings(base).length;
+    const { c } = applyFeats(base, "Polearm Master", 12, "picker");
+    const after = swings(c);
+    expect(after.length).toBe(n + 1);
+    expect(after[after.length - 1].onHit[0].amount).toMatch(/^1d4/);
+  });
+
+  it("Tough is reported on note import (HP baked) but applied by the picker", () => {
+    const noteR = applyFeats(fighter(12), "Tough", 12, "note");
+    expect(noteR.c.maxHp).toBe(110);
+    expect(noteR.notes.join(" ")).toMatch(/already in your sheet/);
+    const pickR = applyFeats(fighter(12), "Tough", 12, "picker");
+    expect(pickR.c.maxHp).toBe(110 + 24);
+  });
+
+  it("Resilient adds the save proficiency even on note import", () => {
+    const { c } = applyFeats(fighter(), "Resilient (Wisdom)", 12, "note");
+    expect(c.proficientSaves).toContain("wis");
+  });
+
+  // --- magic items ---
+  it("applyItems: a +2 weapon bumps to-hit and the first damage die", () => {
+    const base = fighter();
+    const b = swings(base)[0];
+    const { c } = applyItems(base, "- +2 longsword", "picker");
+    const a = swings(c)[0];
+    expect(a.bonus).toBe(b.bonus + 2);
+    expect(a.onHit[0].amount).toMatch(/\+\d+$/);
+    expect(Number(a.onHit[0].amount.split("+")[1])).toBe(Number(b.onHit[0].amount.split("+")[1] ?? 0) + 2);
+  });
+
+  it("+1 plate is reported-not-applied on note import; a +1 sword still applies", () => {
+    const base = fighter();
+    const b = swings(base)[0].bonus;
+    const { c, notes } = applyItems(base, "## Equipment\n- +1 plate armor\n- +1 longsword\n", "note");
+    expect(c.ac).toBe(18); // plate not re-added
+    expect(swings(c)[0].bonus).toBe(b + 1); // sword applied
+    expect(notes.join(" ")).toMatch(/assumed already in your sheet/);
+  });
+
+  it("Flame Tongue adds a 2d6 fire rider", () => {
+    const { c } = applyItems(fighter(), "- Flame Tongue", "picker");
+    expect(swings(c)[0].onHit.some((h) => h.type === "damage" && h.amount === "2d6" && h.damageType === "fire")).toBe(true);
+  });
+
+  it("Cloak of Protection: +1 to all saves on note import, AC untouched", () => {
+    const base = fighter();
+    const { c } = applyItems(base, "- Cloak of Protection", "note");
+    expect(c.saveBonusAll).toBe(base.saveBonusAll + 1);
+    expect(c.ac).toBe(base.ac);
+  });
+
+  it("Gauntlets of Ogre Power is baked on note import, applied by the picker", () => {
+    const base = pcNoteToCombatant(pc({ class: "Fighter", level: 12, stats: { str: 14, dex: 12, con: 16, int: 10, wis: 12, cha: 10 } })).spec!.combatant;
+    expect(applyItems(base, "- Gauntlets of Ogre Power", "note").c.abilities.str).toBe(14);
+    expect(applyItems(base, "- Gauntlets of Ogre Power", "picker").c.abilities.str).toBe(19);
+  });
+
+  it("Wand of the War Mage +2 bumps a caster's spell attack rolls only; the Rod also bumps DCs", () => {
+    const wiz = pcNoteToCombatant(pc({ class: "Evocation Wizard", level: 12, stats: { str: 8, dex: 14, con: 14, int: 20, wis: 12, cha: 10 } })).spec!.combatant;
+    const nums = (x: Combatant, re: RegExp) => (JSON.stringify(x.actions.filter((a) => a.isSpell).map((a) => a.automation)).match(re) ?? []).map((s) => Number(s.match(/-?\d+$/)![0]));
+    const ATK = /"type":"attack","bonus":-?\d+/g;
+    const DC = /"dc":-?\d+/g;
+    const atkBefore = nums(wiz, ATK);
+    const dcBefore = nums(wiz, DC);
+    const wand = applyItems(wiz, "- Wand of the War Mage, +2", "picker").c;
+    expect(nums(wand, ATK)).toEqual(atkBefore.map((n) => n + 2));
+    expect(nums(wand, DC)).toEqual(dcBefore); // DC untouched by the wand
+    const rod = applyItems(wiz, "- Rod of the Pact Keeper, +2", "picker").c;
+    expect(nums(rod, DC)).toEqual(dcBefore.map((n) => n + 2));
+  });
+
+  it("a PC with a race, a feat, and an item still fights", () => {
+    const r = pcNoteToCombatant(
+      pc({
+        name: "Kr?usk",
+        class: "Fighter",
+        level: 14,
+        race: "Half-Orc",
+        body: "## Feats\n- Great Weapon Master\n## Equipment\n- +1 greatsword\n- Cloak of Protection\n",
+      }),
+    );
+    expect(r.error).toBeUndefined();
+    const c = r.spec!.combatant;
+    expect(c.specialRules.some((x) => x.rule === "undyingReturn")).toBe(true);
+    const { result } = runScenarioOnce({ party: [{ template: "x", level: 14, combatant: c, name: "K" }], enemies: ["gladiator"], seed: 5 });
     expect(["party", "monster", "draw"]).toContain(result.winner);
   });
 });
