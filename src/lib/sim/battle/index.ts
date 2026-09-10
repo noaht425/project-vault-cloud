@@ -164,8 +164,10 @@ function placeUnits(
   const monsters = [...units.values()].filter((u) => u.side === "monster" && !pos.has(u.id));
 
   // party enters from the bottom, monsters from the top; a clear band between
-  const partyRows = [grid.height - 2, grid.height - 3, grid.height - 4, grid.height - 5];
-  const monsterRows = [1, 2, 3, 4, 5];
+  // each side deploys from the FRONT of its zone (toward the enemy) so a fight
+  // actually starts in a round or two; the back rows are just spill-over for a crowd
+  const partyRows = [grid.height - 4, grid.height - 5, grid.height - 3, grid.height - 6, grid.height - 2];
+  const monsterRows = [3, 4, 2, 5, 1];
 
   for (const u of party) {
     const a = freeAnchor(grid, footprint(u.ref.size), partyRows, occ) ?? anywhere(grid, footprint(u.ref.size), occ);
@@ -208,8 +210,10 @@ export function autoPlace(
       claim(p.x, p.y, footprint(e.size));
     }
   }
-  const partyRows = [grid.height - 2, grid.height - 3, grid.height - 4, grid.height - 5];
-  const monsterRows = [1, 2, 3, 4, 5];
+  // each side deploys from the FRONT of its zone (toward the enemy) so a fight
+  // actually starts in a round or two; the back rows are just spill-over for a crowd
+  const partyRows = [grid.height - 4, grid.height - 5, grid.height - 3, grid.height - 6, grid.height - 2];
+  const monsterRows = [3, 4, 2, 5, 1];
   for (const e of roster) {
     if (out[e.id]) continue;
     const fp = footprint(e.size);

@@ -37,20 +37,20 @@ describe("battle mode — full grid fight", () => {
 
   it("melee combatants actually close the distance", () => {
     const out = runBattle({ party: standardParty(16), enemies: ["adult-red-dragon"], seed: 1 });
-    // find a party fighter's start and its position a few frames later
     const fighterId = out.frames[0].units.find((u) => u.side === "party" && u.glyph === "B")!.id;
-    const start = out.frames[0].units.find((u) => u.id === fighterId)!;
+    const monId = out.frames[0].units.find((u) => u.side === "monster")!.id;
+    const gapAt = (f: (typeof out.frames)[number]) => {
+      const me = f.units.find((u) => u.id === fighterId);
+      const foe = f.units.find((u) => u.id === monId);
+      return me && foe ? Math.hypot(me.x - foe.x, me.y - foe.y) : Infinity;
+    };
     const moveFrames = out.frames.filter((f) => f.kind === "move" && f.actorId === fighterId);
     expect(moveFrames.length).toBeGreaterThan(0); // it moved at least once
-    // by end of round 1 it should be nearer the dragon than it started
-    const dragonStart = out.frames[0].units.find((u) => u.side === "monster")!;
-    const later = out.frames
-      .filter((f) => f.round <= 2)
-      .flatMap((f) => f.units.filter((u) => u.id === fighterId))
-      .at(-1)!;
-    const d0 = Math.hypot(start.x - dragonStart.x, start.y - dragonStart.y);
-    const d1 = Math.hypot(later.x - dragonStart.x, later.y - dragonStart.y);
-    expect(d1).toBeLessThan(d0);
+    // by the end of round 2 the fighter is right up against the boss (contemporaneous gap),
+    // not left swinging from range
+    const byR2 = out.frames.filter((f) => f.round <= 2).at(-1)!;
+    expect(gapAt(byR2)).toBeLessThan(gapAt(out.frames[0])); // closed ground
+    expect(gapAt(byR2)).toBeLessThanOrEqual(4); // and is now in / near melee
   });
 
   it("the result winner is consistent with the final frame", () => {
@@ -78,5 +78,23 @@ describe("battle mode — full grid fight", () => {
     const pal = out.frames[0].units.find((u) => u.id === "pc-1-vengeance-paladin");
     expect(pal).toBeDefined();
     expect({ x: pal!.x, y: pal!.y }).toEqual({ x: 2, y: 2 });
+  });
+
+  it("a melee routine out of reach after moving is wasted, not resolved at range", () => {
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const out = runBattle({ party: standardParty(5), enemies: ["owlbear"], seed });
+      for (const f of out.frames) {
+        if (f.kind !== "action" || !f.actorId || !/Multiattack|Attack \+|beak|claw/i.test(f.text ?? "")) continue;
+        const actor = f.units.find((u) => u.id === f.actorId);
+        const foe = f.units.find((u) => u.side !== actor?.side && (f.targetIds ?? []).includes(u.id));
+        if (!actor || !foe) continue;
+        // edge-to-edge squares between the two footprints
+        const gx = Math.max(0, actor.x - (foe.x + foe.fp - 1), foe.x - (actor.x + actor.fp - 1));
+        const gy = Math.max(0, actor.y - (foe.y + foe.fp - 1), foe.y - (actor.y + actor.fp - 1));
+        const ftGap = (Math.max(gx, gy)) * 5 + Math.floor(Math.min(gx, gy) / 2) * 5;
+        // a resolved weapon swing (damage numbers in the text) must be within reach
+        if (/-\d+ \(/.test(f.text ?? "")) expect(ftGap, `seed ${seed} R${f.round}: ${f.text}`).toBeLessThanOrEqual(10);
+      }
+    }
   });
 });

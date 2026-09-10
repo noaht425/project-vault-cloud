@@ -29,10 +29,11 @@ import {
   type CombatantState,
 } from "../engine/state";
 import { resolveEnemies } from "../engine/scenario";
+import { feetBetweenBoxes } from "./geometry";
 import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
-import { BattleState, ReactionPause, deriveZones, recordFrame } from "./state";
+import { BattleState, ReactionPause, boxOfUnit, deriveZones, recordFrame, unitReachFt } from "./state";
 
 const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
 
@@ -211,10 +212,22 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
 
   const geo = { geoTargets: geoTargetsFor(state, u, plan), attackMods: attackModsFor(state, u) };
 
-  // round-1 opener (Action Surge, Hunter's Mark, Frightful Presence, …)
+  // a melee routine whose target is still out of reach after moving is WASTED,
+  // not resolved at range (mirrors the player-control guard in applyDecision)
+  const meleeTarget = plan.targetId ? state.units.get(plan.targetId) : undefined;
+  const meleeOutOfReach =
+    plan.needsMelee &&
+    !!meleeTarget &&
+    meleeTarget.alive &&
+    feetBetweenBoxes(boxOfUnit(state, u), boxOfUnit(state, meleeTarget)) > unitReachFt(u) + 0.001;
+
+  // round-1 opener (Action Surge, Hunter's Mark, Frightful Presence, …) — skip a
+  // weapon-routine opener if we can't reach; self-buffs (Rage, Bless) still fire
   if (state.round === 1 && u.ref.ai.opener.length) {
     const opener = pick(state, u, u.ref.ai.opener);
-    if (opener) {
+    const openerIsWeapon =
+      !!opener && (opener.id === "attack" || opener.id === "multiattack" || /multiattack|attack/i.test(opener.name));
+    if (opener && !(meleeOutOfReach && openerIsWeapon)) {
       spend(u, opener);
       markEconomy(u, opener);
       const text = runActionLogged(state, u, opener, { geo }, `${u.name} uses ${opener.name}`);
@@ -228,6 +241,16 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
     }
   }
   if (u.actionUsedThisTurn) return;
+
+  if (meleeOutOfReach) {
+    say(state, `${u.name} can't reach ${meleeTarget!.name} — the attack is wasted`, u.id);
+    recordFrame(state, {
+      kind: "action",
+      actorId: u.id,
+      text: `${u.name} closes in but can't reach ${meleeTarget!.name}`,
+    });
+    return;
+  }
 
   let action = plan.action;
   if (action && !actionAvailable(state, u, action)) {

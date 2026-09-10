@@ -125,11 +125,17 @@ describe("battle control — pause / resume", () => {
       controlled: ["pc-2-gwm-fighter"],
     };
     const auto: BattleDecision[] = [];
-    let run = runBattle({ ...setup, decisions: auto });
-    let guard = 40;
+    const reactionChoices: { round: number; unitId: string; seq: number; take: boolean }[] = [];
+    let run = runBattle({ ...setup, decisions: auto, reactionChoices });
+    let guard = 60;
     while (!run.done && guard-- > 0) {
-      auto.push({ round: run.awaiting!.round, unitId: run.awaiting!.unitId, auto: true });
-      run = runBattle({ ...setup, decisions: auto });
+      if (run.awaitingReaction) {
+        const r = run.awaitingReaction;
+        reactionChoices.push({ round: r.round, unitId: r.unitId, seq: r.seq, take: true });
+      } else {
+        auto.push({ round: run.awaiting!.round, unitId: run.awaiting!.unitId, auto: true });
+      }
+      run = runBattle({ ...setup, decisions: auto, reactionChoices });
     }
     expect(run.done).toBe(true);
     expect(["party", "monster", "draw"]).toContain(run.result.winner);
