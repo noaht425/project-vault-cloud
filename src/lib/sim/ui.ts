@@ -74,18 +74,26 @@ export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS,
 
 // ------------------------------------------------------------- spell picker
 
+const CASTER_CLASS_KEYS = ["wizard", "sorcerer", "cleric", "druid", "bard", "warlock", "paladin", "ranger", "artificer"] as const;
 const TEMPLATE_SPELL_CLASS: Record<string, SpellClass> = {
+  // the UI's own caster templates
   "blaster-wizard": "wizard", "life-cleric": "cleric", "vengeance-paladin": "paladin",
   "hunter-ranger": "ranger", "draconic-sorcerer": "sorcerer", "moon-druid": "druid",
   "lore-bard": "bard", "warlock": "warlock",
+  // an imported PC's templateId is the normalised class key ("cleric", "artificer", …)
+  // — sometimes prefixed "pc-" depending on the build path
+  ...Object.fromEntries(CASTER_CLASS_KEYS.flatMap((k) => [[k, k], [`pc-${k}`, k]])),
 };
 const REACTION_MODELLED = new Set(["shield", "counterspell", "absorb-elements", "hellish-rebuke"]);
 
-/** the spell class of a party spec, or null if it isn't a spellcaster */
+/** the spell class of a party spec, or null if it isn't a spellcaster.
+ *  Prefers `combatant.spellClass` (stamped by makeCaster), then the combatant's
+ *  templateId, then the row's template id. */
 export function pcSpellClass(spec: { template?: string; combatant?: Combatant }): SpellClass | null {
   const stamped = spec.combatant?.spellClass as SpellClass | undefined;
   if (stamped) return stamped;
-  return spec.template ? TEMPLATE_SPELL_CLASS[spec.template] ?? null : null;
+  const id = spec.combatant?.templateId ?? spec.template;
+  return id ? TEMPLATE_SPELL_CLASS[id] ?? null : null;
 }
 
 export interface SpellPick {

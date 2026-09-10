@@ -813,3 +813,27 @@ describe("more races + flight", () => {
     expect(posAfterR1("Fairy")).toBeGreaterThan(posAfterR1(undefined));
   });
 });
+
+describe("spell picker — class resolution", () => {
+  it("resolves cleric / artificer from a templateId even without stamped caster metadata", async () => {
+    const { pcSpellClass } = await import("../src/lib/sim/ui");
+    const { applyPickedSpells } = await import("../src/lib/sim/spells/pick");
+    const { makeTemplate } = await import("../src/lib/sim/engine/templates");
+    // a PC restored from a setup saved before makeCaster stamped spellClass:
+    // templateId = the class key, no spellClass/casterKind/spellAbility
+    const staleCleric = { ...makeTemplate("life-cleric", 8), templateId: "cleric" };
+    delete (staleCleric as Record<string, unknown>).spellClass;
+    delete (staleCleric as Record<string, unknown>).casterKind;
+    delete (staleCleric as Record<string, unknown>).spellAbility;
+    expect(pcSpellClass({ template: "cleric", combatant: staleCleric })).toBe("cleric");
+    const r = applyPickedSpells(staleCleric, ["guiding-bolt", "spirit-guardians"], 8);
+    expect(r.notes).toEqual([]);
+    expect(r.c.actions.some((a) => a.id.startsWith("cast-guiding-bolt"))).toBe(true);
+
+    const staleArti = { ...makeTemplate("blaster-wizard", 8), templateId: "artificer" };
+    delete (staleArti as Record<string, unknown>).spellClass;
+    delete (staleArti as Record<string, unknown>).casterKind;
+    expect(pcSpellClass({ template: "artificer", combatant: staleArti })).toBe("artificer");
+    expect(applyPickedSpells(staleArti, ["fire-bolt"], 8).c.actions.some((a) => a.id === "cast-fire-bolt")).toBe(true);
+  });
+});
