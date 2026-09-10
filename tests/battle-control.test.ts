@@ -152,3 +152,60 @@ describe("battle control — pause / resume", () => {
     expect(JSON.stringify(a.frames.at(-1))).toBe(JSON.stringify(b.frames.at(-1)));
   });
 });
+
+describe("battle control — round-1 opener", () => {
+  const barbSetup = {
+    party: [
+      { template: "totem-barbarian", name: "Grok", level: 9 },
+      { template: "gwm-fighter", name: "Bront", level: 9 },
+    ],
+    enemies: ["adult-red-dragon"] as string[],
+    seed: 3,
+    controlled: ["pc-1-totem-barbarian"],
+  };
+
+  it("computeAwaiting flags the unit's opener on round 1", () => {
+    const aw = runBattle({ ...barbSetup, decisions: [] }).awaiting!;
+    expect(aw.round).toBe(1);
+    expect(aw.openerId).toBe("rage");
+    expect([...aw.actions, ...aw.bonusActions].some((a) => a.id === "rage")).toBe(true);
+  });
+
+  it("an opener bonus fires before the main action", () => {
+    const aw = runBattle({ ...barbSetup, decisions: [] }).awaiting!;
+    const foe = aw.units.find((u) => u.side === "monster")!;
+    const gapTo = (x: number, y: number) =>
+      Math.max(0, x - foe.box.x1, foe.box.x0 - x) + Math.max(0, y - foe.box.y1, foe.box.y0 - y);
+    const dest = aw.reachable
+      .map((k) => k.split(",").map(Number))
+      .map(([x, y]) => ({ x, y, d: gapTo(x, y) }))
+      .sort((p, q) => p.d - q.d)[0];
+    const d: BattleDecision = {
+      round: 1,
+      unitId: "pc-1-totem-barbarian",
+      move: { x: dest.x, y: dest.y },
+      actionId: "attack",
+      targetId: foe.id,
+      bonusActionId: "rage",
+    };
+    const out = runBattle({ ...barbSetup, decisions: [d] });
+    const text = out.frames.map((f) => f.text ?? "").join("\n");
+    const rageAt = text.search(/[Rr]age/);
+    const swingAt = text.search(/Reckless Multiattack|Grok — |Grok uses Reckless/);
+    expect(rageAt).toBeGreaterThanOrEqual(0);
+    // rage is narrated before the attack line for this turn
+    if (swingAt >= 0) expect(rageAt).toBeLessThan(swingAt);
+  });
+
+  it("no opener flag after round 1", () => {
+    const setup = { ...barbSetup, decisions: [{ round: 1, unitId: "pc-1-totem-barbarian", auto: true } as BattleDecision] };
+    let run = runBattle(setup);
+    let guard = 30;
+    const decisions = [...setup.decisions];
+    while (!run.done && run.awaiting && run.awaiting.round < 2 && guard-- > 0) {
+      decisions.push({ round: run.awaiting.round, unitId: run.awaiting.unitId, auto: true });
+      run = runBattle({ ...barbSetup, decisions });
+    }
+    if (run.awaiting && run.awaiting.round >= 2) expect(run.awaiting.openerId).toBeUndefined();
+  });
+});

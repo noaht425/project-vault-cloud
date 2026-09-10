@@ -750,6 +750,12 @@ function Replay({
             <span className="text-xs text-muted">round {awaiting.round} · speed {awaiting.speedFt} ft</span>
             {loading && <span className="text-xs text-muted">resolving…</span>}
           </div>
+          {awaiting.openerId && (
+            <p className="text-xs text-warning">
+              ★ opener: {[...awaiting.actions, ...awaiting.bonusActions].find((a) => a.id === awaiting.openerId)?.name} —
+              {" "}pick it and it fires before the main action
+            </p>
+          )}
           <p className="text-xs text-muted">
             {step === "move" && "Click a highlighted square to move there (or leave it to stay put), then pick an action."}
             {step === "target" && "Click an enemy to target."}
@@ -777,7 +783,7 @@ function Replay({
                 }`}
                 title={a.needsMelee ? "melee" : a.friendly ? "self / ally" : a.aoe ? `${a.aoe.shape} ${a.aoe.sizeFt} ft` : "ranged"}
               >
-                {a.name}
+                {awaiting.openerId === a.id ? "★ " : ""}{a.name}
               </button>
             ))}
             {wiz.action && (
@@ -809,7 +815,7 @@ function Replay({
                   }`}
                   title={a.needsMelee ? "melee" : a.friendly ? "self / ally" : "ranged"}
                 >
-                  {a.name}
+                  {awaiting.openerId === a.id ? "★ " : ""}{a.name}
                 </button>
               ))}
               {wiz.bonusAction && (

@@ -95,6 +95,9 @@ export interface AwaitingInput {
   bonusActions: AwaitAction[];
   /** every living combatant + its footprint box, for the panel's range / line-of-sight maths */
   units: AwaitUnit[];
+  /** round 1 only: the id of this unit's recommended opener (Rage / Action Surge /
+   *  Hunter's Mark / …) if it's available — the UI tags it and it fires first */
+  openerId?: string;
 }
 
 const isAreaNode = (n: AutomationNode): n is Extract<AutomationNode, { type: "target" }> =>
@@ -141,6 +144,14 @@ export function computeAwaiting(state: BattleState, u: CombatantState): Awaiting
     else if ((a.cost.bonus ?? 0) > 0) bonusActions.push(describe(a));
   }
 
+  // round-1 opener: the first ai.opener id that's still an available action here
+  const openerId =
+    state.round === 1
+      ? u.ref.ai.opener.find((id) =>
+          [...actions, ...bonusActions].some((x) => x.id === id),
+        )
+      : undefined;
+
   const units: AwaitUnit[] = [];
   for (const x of state.units.values()) {
     if (!x.alive) continue;
@@ -164,6 +175,7 @@ export function computeAwaiting(state: BattleState, u: CombatantState): Awaiting
     actions,
     bonusActions,
     units,
+    openerId,
   };
 }
 
@@ -286,8 +298,13 @@ export function applyDecision(state: BattleState, u: CombatantState, d: BattleDe
     say(state, `${u.name} holds`, u.id);
     return true;
   }
+  // an opener / self-buff bonus (Rage, Divine Favor, Hunter's Mark, Action
+  // Surge) has to land BEFORE the main action to matter; anything else (Healing
+  // Word, an off-hand swing) goes after the main action as usual
+  const bonusFirst = !!d.bonusActionId && u.ref.ai.opener.includes(d.bonusActionId);
+  if (bonusFirst) runOne(d.bonusActionId, d.bonusTargetId, d.bonusAoeOrigin);
   runOne(d.actionId, d.targetId, d.aoeOrigin);
-  if (u.alive && !isIncapacitated(u)) runOne(d.bonusActionId, d.bonusTargetId, d.bonusAoeOrigin);
+  if (!bonusFirst && u.alive && !isIncapacitated(u)) runOne(d.bonusActionId, d.bonusTargetId, d.bonusAoeOrigin);
   return true;
 }
 
