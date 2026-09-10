@@ -2,7 +2,7 @@
 // responsive during a long sweep); falls back to a synchronous run on the main
 // thread if workers aren't available.
 
-import { runSim, runSweep, runBattleFromSetup, runDayFromSetup, type BattleDecision, type BattleRun, type DayRun, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
+import { runSim, runSweep, runBattleFromSetup, runDayFromSetup, type BattleDecision, type BattleRun, type DayRun, type ReactionChoice, type SimResult, type SimSetup, type SweepDim, type SweepOut } from "./ui";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -33,10 +33,18 @@ function getWorker(): Worker | null {
   return worker;
 }
 
+type BattleExtra = {
+  dim?: SweepDim;
+  seed?: number;
+  decisions?: BattleDecision[];
+  reactionChoices?: ReactionChoice[];
+  reactionAuto?: string[];
+};
+
 function send<T>(
   kind: "sim" | "sweep" | "battle" | "day",
   setup: SimSetup,
-  extra?: { dim?: SweepDim; seed?: number; decisions?: BattleDecision[] },
+  extra?: BattleExtra,
 ): Promise<T> {
   const w = getWorker();
   if (!w) {
@@ -48,7 +56,12 @@ function send<T>(
           ? runSweep(setup, extra!.dim!)
           : kind === "day"
             ? runDayFromSetup(setup)
-            : runBattleFromSetup(setup, { seed: extra?.seed, decisions: extra?.decisions });
+            : runBattleFromSetup(setup, {
+                seed: extra?.seed,
+                decisions: extra?.decisions,
+                reactionChoices: extra?.reactionChoices,
+                reactionAuto: extra?.reactionAuto,
+              });
     return Promise.resolve(sync as unknown as T);
   }
   const id = nextId++;
@@ -61,7 +74,15 @@ function send<T>(
           ? { id, kind, setup, dim: extra!.dim }
           : kind === "day"
             ? { id, kind, setup }
-            : { id, kind, setup, seed: extra?.seed, decisions: extra?.decisions };
+            : {
+                id,
+                kind,
+                setup,
+                seed: extra?.seed,
+                decisions: extra?.decisions,
+                reactionChoices: extra?.reactionChoices,
+                reactionAuto: extra?.reactionAuto,
+              };
     w.postMessage(msg);
   });
 }
@@ -74,8 +95,14 @@ export function runSweepAsync(setup: SimSetup, dim: SweepDim): Promise<SweepOut>
   return send<SweepOut>("sweep", setup, { dim });
 }
 
-export function runBattleAsync(setup: SimSetup, seed?: number, decisions?: BattleDecision[]): Promise<BattleRun> {
-  return send<BattleRun>("battle", setup, { seed, decisions });
+export function runBattleAsync(
+  setup: SimSetup,
+  seed?: number,
+  decisions?: BattleDecision[],
+  reactionChoices?: ReactionChoice[],
+  reactionAuto?: string[],
+): Promise<BattleRun> {
+  return send<BattleRun>("battle", setup, { seed, decisions, reactionChoices, reactionAuto });
 }
 
 export function runDayAsync(setup: SimSetup): Promise<DayRun> {

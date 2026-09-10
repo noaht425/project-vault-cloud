@@ -32,7 +32,7 @@ import { resolveEnemies } from "../engine/scenario";
 import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
-import { BattleState, deriveZones, recordFrame } from "./state";
+import { BattleState, ReactionPause, deriveZones, recordFrame } from "./state";
 
 const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
 
@@ -275,7 +275,8 @@ export function runBattleLoop(state: BattleState): void {
     terrain: { width: state.grid.width, height: state.grid.height, tiles: terrainString(state) },
   });
 
-  while (!state.ended && !state.pausedForInput && state.round < state.maxRounds) {
+  try {
+   while (!state.ended && !state.pausedForInput && state.round < state.maxRounds) {
     state.round++;
     spawnWaves(state);
     for (const u of state.units.values()) {
@@ -343,6 +344,12 @@ export function runBattleLoop(state: BattleState): void {
         if (state.ended) break;
       }
     }
+   }
+  } catch (e) {
+    // a controlled unit hit a reaction decision point mid-resolution; state
+    // already carries awaitingReaction + pausedForInput, so just unwind.
+    if (e instanceof ReactionPause) return;
+    throw e;
   }
 
   if (state.pausedForInput) return; // stopped mid-round for player input, not over

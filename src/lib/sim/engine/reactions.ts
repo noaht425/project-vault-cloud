@@ -11,7 +11,25 @@
 
 import type { Action, AutomationNode } from "../schema";
 import { runAction, runAutomation } from "./interpreter";
-import { CombatantState, CombatState, canTakeReactions, isIncapacitated, say } from "./state";
+import { CombatantState, CombatState, canTakeReactions, isIncapacitated, say, type ReactionAsk } from "./state";
+
+/**
+ * At a reaction decision point, hand off to the Battle-mode seam if one is
+ * installed; otherwise keep the engine's own auto-heuristic (return true = fire).
+ * The seam decides for itself whether `unitId` is actually player-controlled —
+ * for an AI unit it just returns true so behaviour is unchanged.
+ */
+function decideReaction(
+  state: CombatState,
+  u: CombatantState,
+  kind: ReactionAsk["kind"],
+  prompt: string,
+  takeLabel: string,
+  declineLabel: string,
+): boolean {
+  if (!state.askReaction) return true;
+  return state.askReaction({ unitId: u.id, kind, prompt, takeLabel, declineLabel });
+}
 
 type RKind =
   | "shieldAc"       // Shield — +5 AC, may turn this hit into a miss
@@ -95,6 +113,15 @@ export function reactToIncomingAttack(
       return { negated: true, shielded: false };
     }
     if (k === "shieldAc" && !p.crit && p.hitMargin < 5) {
+      const ok = decideReaction(
+        state,
+        t,
+        "shield",
+        `An attack hits ${t.name} by ${p.hitMargin} — Shield (+5 AC until your next turn) turns it into a miss.`,
+        "Cast Shield",
+        "Take the hit",
+      );
+      if (!ok) continue;
       fire(state, t, r); // applies the +5 "shield" effect
       say(state, `${t.name} casts Shield`, t.id);
       return { negated: false, shielded: true };
@@ -115,6 +142,15 @@ export function reduceIncomingDamage(
   if (state.inReaction || !viaAttack || amount < 15) return amount;
   for (const r of target.ref.reactions) {
     if (classify(r) !== "halveDamage" || !ready(state, target, r)) continue;
+    const ok = decideReaction(
+      state,
+      target,
+      "uncannyDodge",
+      `${target.name} is about to take ${amount} damage from an attack — Uncanny Dodge halves it to ${Math.floor(amount / 2)}.`,
+      "Uncanny Dodge",
+      "Take it full",
+    );
+    if (!ok) return amount;
     consume(target, r);
     say(state, `${target.name} rolls with it (Uncanny Dodge)`, target.id);
     return Math.floor(amount / 2);
@@ -134,8 +170,20 @@ export function reactToAttackResolved(
   for (const r of t.ref.reactions) {
     if (!ready(state, t, r)) continue;
     const k = classify(r);
-    if (k === "retaliateOnHit" && p.hit) { fire(state, t, r); return; }
-    if (k === "retaliateOnMiss" && !p.hit && p.melee) { fire(state, t, r); return; }
+    const wants =
+      (k === "retaliateOnHit" && p.hit) || (k === "retaliateOnMiss" && !p.hit && p.melee);
+    if (!wants) continue;
+    const ok = decideReaction(
+      state,
+      t,
+      "riposte",
+      `${p.attacker.name} ${p.hit ? "hit" : "missed"} ${t.name} — ${r.name} spends a superiority die to strike back.`,
+      r.name,
+      "Hold reaction",
+    );
+    if (!ok) return;
+    fire(state, t, r);
+    return;
   }
 }
 
@@ -250,6 +298,15 @@ export function mayCounterspell(state: CombatState, caster: CombatantState, acti
     if (u.side === caster.side) continue;
     for (const r of u.ref.reactions) {
       if (classify(r) !== "counterspell" || !ready(state, u, r)) continue;
+      const ok = decideReaction(
+        state,
+        u,
+        "counterspell",
+        `${caster.name} is casting ${action.name} — Counterspell stops it before it lands.`,
+        "Counterspell it",
+        "Let it resolve",
+      );
+      if (!ok) continue;
       consume(u, r);
       say(state, `${u.name} counterspells ${caster.name}'s ${action.name}`, u.id);
       return true;

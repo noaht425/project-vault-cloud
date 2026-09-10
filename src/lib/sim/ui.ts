@@ -34,7 +34,17 @@ import {
 import { validateCombatant } from "./validate";
 import type { MonteCarloResult } from "./engine/montecarlo";
 import type { CombatResult } from "./engine/loop";
-import { runBattle, battleRoster, autoPlace, defaultGridSize, type RosterEntry, type RosterInit } from "./battle";
+import {
+  runBattle,
+  battleRoster,
+  autoPlace,
+  defaultGridSize,
+  type AwaitingReaction,
+  type ReactionAsk,
+  type ReactionChoice,
+  type RosterEntry,
+  type RosterInit,
+} from "./battle";
 import { gridFromDef, makeGrid, tilesToString } from "./battle/grid";
 import { coneCells, lineTemplateCells, sphereCells } from "./battle/geometry";
 import type { BattleGrid, BattleMapDef } from "./battle/grid";
@@ -55,6 +65,7 @@ import {
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
 export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, RosterInit, AwaitingInput, AwaitAction, AwaitUnit, BattleDecision };
+export type { AwaitingReaction, ReactionAsk, ReactionChoice };
 export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
@@ -282,6 +293,8 @@ export interface BattleRun {
   initiative: RosterInit[];
   /** set while the fight is paused for a controlled unit's decision */
   awaiting?: AwaitingInput;
+  /** set while the fight is paused asking a controlled unit about a reaction */
+  awaitingReaction?: AwaitingReaction;
   /** true once the fight has actually concluded */
   done: boolean;
 }
@@ -328,6 +341,8 @@ export function runBattleFromSetup(
     placements?: Record<string, { x: number; y: number }>;
     seed?: number;
     decisions?: BattleDecision[];
+    reactionChoices?: ReactionChoice[];
+    reactionAuto?: string[];
   } = {},
 ): BattleRun {
   const enemies = enemyList(setup.enemies);
@@ -348,6 +363,8 @@ export function runBattleFromSetup(
     waves: waves.length ? waves : undefined,
     controlled: setup.battleControl,
     decisions: overrides.decisions,
+    reactionChoices: overrides.reactionChoices,
+    reactionAuto: overrides.reactionAuto,
   });
   return {
     frames: out.frames,
@@ -356,6 +373,7 @@ export function runBattleFromSetup(
     seed,
     initiative: out.initiative,
     awaiting: out.awaiting,
+    awaitingReaction: out.awaitingReaction,
     done: out.done,
   };
 }

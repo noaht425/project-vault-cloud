@@ -105,11 +105,30 @@ export interface CombatState {
   summonRegistry?: Record<string, Combatant>;
   /** set while a reaction is resolving, so reactions don't trigger reactions */
   inReaction?: boolean;
+  /**
+   * Battle mode seam: decide whether a unit spends its reaction. Returns
+   * true = take it, false = decline. May throw to unwind the stack when it
+   * needs to pause the fight and ask a human. Left undefined by the
+   * Monte-Carlo engine and for AI units, so the reaction code keeps its own
+   * auto-heuristic in that case.
+   */
+  askReaction?: (p: ReactionAsk) => boolean;
   /** what-if knobs for this run */
   tuning?: CombatTuning;
   /** round the first party member dropped to 0, and who */
   firstPartyDownRound?: number;
   firstPartyDownId?: string;
+}
+
+/** the question `state.askReaction` is handed at a reaction decision point */
+export interface ReactionAsk {
+  unitId: string;
+  kind: "shield" | "counterspell" | "riposte" | "uncannyDodge";
+  /** one human sentence describing the trigger and what the reaction would do */
+  prompt: string;
+  /** button label for spending the reaction / for declining it */
+  takeLabel: string;
+  declineLabel: string;
 }
 
 /** Reset a combatant's per-turn action economy at the start of its own turn. */

@@ -36,7 +36,7 @@ import {
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync, runDayAsync } from "@/lib/sim/runner";
 import { aoePreview, autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
-import type { AwaitAction, AwaitingInput, BattleDecision, BattleMapDef, BattleRun, DayRun, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
+import type { AwaitAction, AwaitingInput, AwaitingReaction, BattleDecision, BattleMapDef, BattleRun, DayRun, ReactionChoice, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -380,8 +380,12 @@ interface Wizard {
 }
 const EMPTY_WIZ: Wizard = { move: null, action: null, target: null, origin: null, bonusAction: null, bonusTarget: null };
 
+// the player's recorded choices, in fight order: a turn plan or a reaction answer
+type Step = { kind: "turn"; d: BattleDecision } | { kind: "react"; r: ReactionChoice };
+
 function BattleMap({ setup }: { setup: SimSetup }) {
-  const [decisions, setDecisions] = useState<BattleDecision[]>([]);
+  const [steps, setSteps] = useState<Step[]>([]);
+  const [reactAuto, setReactAuto] = useState<string[]>([]);
   const [run, setRun] = useState<BattleRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [autoAi, setAutoAi] = useState(false);
@@ -389,11 +393,13 @@ function BattleMap({ setup }: { setup: SimSetup }) {
   const started = useRef(false);
 
   const fetchRun = useCallback(
-    (ds: BattleDecision[], ai: boolean) => {
+    (st: Step[], ra: string[], ai: boolean) => {
       setLoading(true);
       setWiz(EMPTY_WIZ);
       const s = ai ? { ...setup, battleControl: [] as string[] } : setup;
-      runBattleAsync(s, setup.seed, ds).then((r) => {
+      const ds = st.filter((x): x is Extract<Step, { kind: "turn" }> => x.kind === "turn").map((x) => x.d);
+      const rc = st.filter((x): x is Extract<Step, { kind: "react" }> => x.kind === "react").map((x) => x.r);
+      runBattleAsync(s, setup.seed, ds, rc, ra).then((r) => {
         setRun(r);
         setLoading(false);
       });
@@ -404,39 +410,51 @@ function BattleMap({ setup }: { setup: SimSetup }) {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    fetchRun([], false);
+    fetchRun([], [], false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const push = (ds: BattleDecision[]) => {
-    setDecisions(ds);
-    fetchRun(ds, autoAi);
+  const push = (st: Step[], ra: string[] = reactAuto) => {
+    setSteps(st);
+    setReactAuto(ra);
+    fetchRun(st, ra, autoAi);
   };
-  const commit = (d: BattleDecision) => push([...decisions, d]);
-  const undoTurn = () => push(decisions.slice(0, -1));
+  const commit = (d: BattleDecision) => push([...steps, { kind: "turn", d }]);
+  const commitReaction = (r: ReactionChoice) => push([...steps, { kind: "react", r }]);
+  const undoStep = () => push(steps.slice(0, -1));
   const finishWithAi = () => {
     setAutoAi(true);
-    setDecisions(decisions);
-    fetchRun(decisions, true);
+    fetchRun(steps, reactAuto, true);
   };
 
   if (!run) return <p className="text-xs text-muted">Setting up the battle…</p>;
 
   const aw = run.awaiting;
+  const rx = run.awaitingReaction;
   return (
     <Replay
-      key={run.frames.length + (aw ? ":await" : ":done")}
+      key={run.frames.length + (rx ? ":react" : aw ? ":await" : ":done")}
       run={run}
       awaiting={aw}
+      reaction={rx}
       loading={loading}
       wiz={wiz}
       setWiz={setWiz}
-      canUndo={decisions.length > 0}
+      canUndo={steps.length > 0}
       onCommit={commit}
+      onReact={(take) =>
+        rx && commitReaction({ round: rx.round, unitId: rx.unitId, seq: rx.seq, take })
+      }
+      onReactAuto={() => {
+        if (!rx) return;
+        // decline this one and hand this unit's reactions back to the AI
+        push([...steps, { kind: "react", r: { round: rx.round, unitId: rx.unitId, seq: rx.seq, take: false } }],
+          reactAuto.includes(rx.unitId) ? reactAuto : [...reactAuto, rx.unitId]);
+      }}
       onAi={() => aw && commit({ round: aw.round, unitId: aw.unitId, auto: true })}
-      onUndo={undoTurn}
+      onUndo={undoStep}
       onFinishAi={finishWithAi}
-      onReplay={() => push([])}
+      onReplay={() => push([], [])}
     />
   );
 }
@@ -444,11 +462,14 @@ function BattleMap({ setup }: { setup: SimSetup }) {
 function Replay({
   run,
   awaiting,
+  reaction,
   loading,
   wiz,
   setWiz,
   canUndo,
   onCommit,
+  onReact,
+  onReactAuto,
   onAi,
   onUndo,
   onFinishAi,
@@ -456,11 +477,14 @@ function Replay({
 }: {
   run: BattleRun;
   awaiting?: AwaitingInput;
+  reaction?: AwaitingReaction;
   loading: boolean;
   wiz: Wizard;
   setWiz: (w: Wizard) => void;
   canUndo: boolean;
   onCommit: (d: BattleDecision) => void;
+  onReact: (take: boolean) => void;
+  onReactAuto: () => void;
   onAi: () => void;
   onUndo: () => void;
   onFinishAi: () => void;
@@ -474,14 +498,15 @@ function Replay({
   const logRef = useRef<HTMLDivElement>(null);
   const last = frames.length - 1;
   const atEnd = idx >= last;
+  const paused = !!awaiting || !!reaction;
   // while awaiting input, always show the paused (final) frame
-  const shownIdx = awaiting ? last : Math.min(idx, last);
+  const shownIdx = paused ? last : Math.min(idx, last);
 
   useEffect(() => {
-    if (!playing || atEnd) return;
+    if (!playing || atEnd || paused) return;
     const t = setTimeout(() => setIdx((i) => i + 1), speed);
     return () => clearTimeout(t);
-  }, [playing, idx, speed, atEnd]);
+  }, [playing, idx, speed, atEnd, paused]);
 
   const frame = frames[shownIdx];
   const dims = frames[0].terrain!;
@@ -533,7 +558,7 @@ function Replay({
 
   // keyboard transport (space = play/pause, arrows = step, home/end)
   useEffect(() => {
-    if (awaiting) return;
+    if (paused) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -545,7 +570,7 @@ function Replay({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [awaiting, atEnd, last]);
+  }, [paused, atEnd, last]);
 
   // ---- control-mode board interactions ----
   const reachSet = useMemo(() => new Set(awaiting?.reachable ?? []), [awaiting]);
@@ -621,7 +646,32 @@ function Replay({
 
   return (
     <section className="flex flex-col gap-3">
-      {awaiting ? (
+      {reaction ? (
+        <div className="flex flex-col gap-2 border border-warning/50 bg-warning/5 rounded p-3 text-sm">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="font-medium text-warning">⚡ Reaction — {reaction.unitName}</span>
+            <span className="text-xs text-muted">round {reaction.round}</span>
+            {loading && <span className="text-xs text-muted">resolving…</span>}
+          </div>
+          <p className="text-xs text-normal">{reaction.prompt}</p>
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <Button variant="primary" onClick={() => onReact(true)} disabled={loading}>
+              {reaction.takeLabel}
+            </Button>
+            <Button onClick={() => onReact(false)} disabled={loading}>
+              {reaction.declineLabel}
+            </Button>
+            <button className="text-xs text-muted hover:text-normal" onClick={onReactAuto} disabled={loading}>
+              stop asking — let the AI run {reaction.unitName}&rsquo;s reactions
+            </button>
+            {canUndo && (
+              <button className="text-xs text-muted hover:text-normal" onClick={onUndo} disabled={loading}>
+                undo
+              </button>
+            )}
+          </div>
+        </div>
+      ) : awaiting ? (
         <div className="flex flex-col gap-2 border border-accent/40 bg-accent/5 rounded p-3 text-sm">
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className="font-medium text-accent">Your turn — {awaiting.unitName}</span>

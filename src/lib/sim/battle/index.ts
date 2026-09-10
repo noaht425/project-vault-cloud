@@ -11,10 +11,20 @@ import type { Size } from "../schema";
 import type { AwaitingInput, BattleDecision } from "./control";
 import { BattleGrid, BattleMapDef, blocksMove, footprint, gridFromDef, inBounds, makeGrid, terrainAt } from "./grid";
 import { runBattleLoop } from "./loop";
-import { BattleState, type BattleFrame, type Pos, type Wave } from "./state";
+import {
+  BattleState,
+  ReactionPause,
+  type AwaitingReaction,
+  type BattleFrame,
+  type Pos,
+  type ReactionChoice,
+  type Wave,
+} from "./state";
 
 export type { BattleFrame, BattleGrid, BattleMapDef };
 export { makeGrid, gridFromDef };
+export type { AwaitingReaction, ReactionChoice, Wave };
+export type { ReactionAsk } from "../engine/state";
 export type { BattleDecision, AwaitingInput, AwaitAction, AwaitUnit } from "./control";
 
 export interface BattleSetup {
@@ -36,6 +46,10 @@ export interface BattleSetup {
   controlled?: string[];
   /** recorded player choices, replayed on every run */
   decisions?: BattleDecision[];
+  /** recorded answers to reaction prompts, replayed on every run */
+  reactionChoices?: ReactionChoice[];
+  /** controlled ids whose reactions the player has handed back to the AI */
+  reactionAuto?: string[];
 }
 
 export interface RosterInit {
@@ -55,6 +69,8 @@ export interface BattleOutcome {
   initiative: RosterInit[];
   /** set when the loop stopped waiting for a controlled unit's decision */
   awaiting?: AwaitingInput;
+  /** set when the loop stopped to ask a controlled unit about a reaction */
+  awaitingReaction?: AwaitingReaction;
   /** true when the fight actually concluded (not paused for input) */
   done: boolean;
 }
@@ -249,6 +265,29 @@ export function runBattle(s: BattleSetup): BattleOutcome {
     decisions: s.decisions ?? [],
     waves: s.waves && s.waves.length ? s.waves : undefined,
     spawnedWaves: new Set(),
+    reactionChoices: s.reactionChoices ?? [],
+    reactionAuto: s.reactionAuto && s.reactionAuto.length ? new Set(s.reactionAuto) : undefined,
+    reactionSeq: 0,
+  };
+
+  // Battle-mode reaction seam: for an AI unit (or one the player handed back),
+  // keep the engine's auto-heuristic; for a controlled unit, replay a recorded
+  // answer or pause the fight and throw to unwind out to runBattleLoop.
+  state.askReaction = (p) => {
+    if (!state.controlled?.has(p.unitId) || state.reactionAuto?.has(p.unitId)) return true;
+    const seq = state.reactionSeq++;
+    const rec = state.reactionChoices?.find(
+      (c) => c.unitId === p.unitId && c.seq === seq && c.round === state.round,
+    );
+    if (rec) return rec.take;
+    state.awaitingReaction = {
+      ...p,
+      seq,
+      round: state.round,
+      unitName: state.units.get(p.unitId)?.name ?? p.unitId,
+    };
+    state.pausedForInput = true;
+    throw new ReactionPause();
   };
 
   runBattleLoop(state);
@@ -265,6 +304,7 @@ export function runBattle(s: BattleSetup): BattleOutcome {
     glyphs: Object.fromEntries(glyphs),
     initiative,
     awaiting: state.awaiting,
+    awaitingReaction: state.awaitingReaction,
     done: !state.pausedForInput,
   };
 }

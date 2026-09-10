@@ -2,7 +2,7 @@
 // frame recorder. Positions live in `state.pos` (not on CombatantState) so every
 // reused engine function keeps working unchanged.
 
-import type { CombatState, CombatantState } from "../engine/state";
+import type { CombatState, CombatantState, ReactionAsk } from "../engine/state";
 import { footprint, reachFt as sizeReachFt } from "./grid";
 import { boxOf, feetBetweenBoxes, type Box } from "./geometry";
 import type { BattleGrid } from "./grid";
@@ -33,6 +33,14 @@ export interface BattleState extends CombatState {
   /** reinforcement waves: extra monsters that arrive at a map edge on a given round */
   waves?: Wave[];
   spawnedWaves: Set<number>;
+  /** ids whose reactions the player has handed back to the AI ("stop asking") */
+  reactionAuto?: Set<string>;
+  /** recorded player answers to reaction prompts, replayed each run */
+  reactionChoices?: ReactionChoice[];
+  /** monotonic per-run counter, bumped at every controlled-unit reaction decision point */
+  reactionSeq: number;
+  /** set when the loop stopped to ask a controlled unit about a reaction */
+  awaitingReaction?: AwaitingReaction;
 }
 
 export interface Wave {
@@ -40,6 +48,30 @@ export interface Wave {
   /** enemy id strings ("id" / "id x3") */
   enemies: string[];
   edge: "top" | "bottom" | "left" | "right";
+}
+
+export interface ReactionChoice {
+  round: number;
+  unitId: string;
+  /** the reactionSeq value this answer belongs to */
+  seq: number;
+  /** true = spend the reaction, false = decline */
+  take: boolean;
+}
+
+export interface AwaitingReaction extends ReactionAsk {
+  round: number;
+  seq: number;
+  unitName: string;
+}
+
+/** thrown by the askReaction seam to unwind out of deep action resolution so the
+ *  loop can pause the fight and surface the prompt. Caught in runBattleLoop. */
+export class ReactionPause extends Error {
+  constructor() {
+    super("battle paused for a reaction decision");
+    this.name = "ReactionPause";
+  }
 }
 
 export interface BattleIntent {
