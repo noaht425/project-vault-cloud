@@ -837,3 +837,35 @@ describe("spell picker — class resolution", () => {
     expect(applyPickedSpells(staleArti, ["fire-bolt"], 8).c.actions.some((a) => a.id === "cast-fire-bolt")).toBe(true);
   });
 });
+
+describe("weapon selector", () => {
+  it("rebuilds the base attack routine around the chosen weapon", async () => {
+    const { buildParty } = await import("../src/lib/sim/engine/scenario");
+    const swings = (c: { actions: { id: string; automation: unknown[] }[] }) => {
+      const atk = c.actions.find((a) => a.id === "attack")!;
+      const eff = (atk.automation[0] as { effects: { type: string; bonus: number; onHit: { type: string; amount: string; damageType: string }[] }[] }).effects;
+      return eff.filter((e) => e.type === "attack");
+    };
+    const F = (weapon?: string, feats?: string[]) =>
+      buildParty([{ template: "gwm-fighter", name: "B", level: 11, weapon, feats }])[0];
+
+    const axe = swings(F("Greataxe"))[0];
+    expect(axe.onHit.find((h) => h.type === "damage")!.amount).toMatch(/^1d12[+-]/);
+    expect(axe.onHit.find((h) => h.type === "damage")!.damageType).toBe("slashing");
+
+    // a ranged weapon flips the AI to keep distance
+    expect(F("Longbow").ai.keepDistance).toBe(true);
+    expect(swings(F("Longbow"))[0].onHit.find((h) => h.type === "damage")!.damageType).toBe("piercing");
+
+    // a reach weapon tags the action so Battle mode gives it 10 ft
+    expect(F("Glaive").actions.find((a) => a.id === "attack")!.text ?? "").toMatch(/reach 10/i);
+
+    // GWM still layers on top (weapon runs first)
+    const gwmAxe = swings(F("Greataxe", ["Great Weapon Master"]))[0];
+    expect(gwmAxe.onHit.some((h) => h.type === "damage" && h.amount === "10")).toBe(true);
+
+    // rogue sneak dice survive a weapon swap
+    const rogue = buildParty([{ template: "assassin-rogue", name: "S", level: 9, weapon: "Shortsword" }])[0];
+    expect(swings(rogue)[0].onHit.some((h) => h.type === "damage" && /d6$/.test(h.amount))).toBe(true);
+  });
+});

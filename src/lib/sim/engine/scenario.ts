@@ -5,7 +5,7 @@ import type { Combatant } from "../schema";
 import { FIXTURES_BY_ID } from "../fixtures";
 import { MINIONS } from "./minions";
 import { applyLoadout, makeTemplate, type Loadout } from "./templates";
-import { applyRace, applyFeats, applyItems } from "./pc-extras";
+import { applyRace, applyFeats, applyItems, applyWeapon } from "./pc-extras";
 import { applyPickedSpells } from "../spells/pick";
 import { runCombat, summarise, type CombatResult, type RunOptions } from "./loop";
 import { monteCarlo, type MonteCarloResult } from "./montecarlo";
@@ -24,6 +24,8 @@ export interface PartyMemberSpec {
   items?: string[];
   /** explicit spell ids (cantrips + leveled + reaction spells); replaces the auto list */
   spells?: string[];
+  /** a specific weapon name (from WEAPON_OPTIONS) — rebuilds the base attack routine */
+  weapon?: string;
 }
 
 const isPaladin = (p: Combatant): boolean => p.templateId === "vengeance-paladin" || p.templateId === "paladin";
@@ -37,6 +39,7 @@ export function buildParty(specs: PartyMemberSpec[]): Combatant[] {
     if (s.loadout) c = { ...applyLoadout(c, s.loadout), id: c.id, name: c.name };
     // per-PC picker overlays: race traits, feats, magic items
     if (s.race) c = applyRace(c, s.race, s.level).c;
+    if (s.weapon) c = applyWeapon(c, s.weapon, s.level).c;
     if (s.spells?.length) c = applyPickedSpells(c, s.spells, s.level).c;
     if (s.feats?.length) c = applyFeats(c, s.feats.join("\n"), s.level, "picker").c;
     if (s.items?.length) c = applyItems(c, s.items.join("\n"), "picker").c;

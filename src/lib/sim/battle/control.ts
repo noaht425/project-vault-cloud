@@ -43,8 +43,19 @@ export function runActionLogged(
   const before = state.log.length;
   runAction(state, u, action, opts);
   const lines = state.log.slice(before).map((l) => l.text).filter(Boolean);
-  return lines.length ? lines.join("  ·  ") : fallback;
+  if (!lines.length) return fallback;
+  // `runAction` logs its own headline ("X uses <action> -> …") LAST, after the
+  // sub-lines produced mid-resolution (a target dropping to 0, a triggered
+  // reaction). Hoist that headline to the front so the frame reads in order:
+  // what happened, then its consequences.
+  const headRe = new RegExp(`^${escapeRe(u.name)} (?:\\([^)]+\\) )?uses `);
+  let headIdx = -1;
+  for (let i = lines.length - 1; i > 0; i--) if (headRe.test(lines[i])) { headIdx = i; break; }
+  if (headIdx > 0) lines.unshift(lines.splice(headIdx, 1)[0]);
+  return lines.join("  ·  ");
 }
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export interface BattleDecision {
   round: number;

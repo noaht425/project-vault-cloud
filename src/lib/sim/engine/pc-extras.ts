@@ -351,6 +351,107 @@ export function applyRace(c: Combatant, raw: string, level: number): { c: Combat
   return { c: out, notes };
 }
 
+// -------------------------------- weapon --------------------------------
+
+interface WeaponDef {
+  name: string;
+  die: string; // for a versatile weapon: the die when wielded as chosen (see the two entries)
+  type: DamageType;
+  finesse?: boolean; // to-hit with the better of STR / DEX
+  ranged?: boolean; // to-hit with DEX; the wielder keeps its distance
+  reach10?: boolean; // glaive / halberd / pike / lance / whip
+}
+
+// A practical subset — enough to cover what a party actually swings. Versatile
+// weapons appear once for each grip.
+export const WEAPONS: WeaponDef[] = [
+  // two-handed / heavy melee
+  { name: "Greataxe", die: "1d12", type: "slashing" },
+  { name: "Greatsword", die: "2d6", type: "slashing" },
+  { name: "Maul", die: "2d6", type: "bludgeoning" },
+  { name: "Glaive", die: "1d10", type: "slashing", reach10: true },
+  { name: "Halberd", die: "1d10", type: "slashing", reach10: true },
+  { name: "Pike", die: "1d10", type: "piercing", reach10: true },
+  { name: "Lance", die: "1d12", type: "piercing", reach10: true },
+  { name: "Longsword (two-handed)", die: "1d10", type: "slashing" },
+  { name: "Battleaxe (two-handed)", die: "1d10", type: "slashing" },
+  { name: "Warhammer (two-handed)", die: "1d10", type: "bludgeoning" },
+  { name: "Quarterstaff (two-handed)", die: "1d8", type: "bludgeoning" },
+  { name: "Spear (two-handed)", die: "1d8", type: "piercing" },
+  // one-handed melee
+  { name: "Longsword", die: "1d8", type: "slashing" },
+  { name: "Battleaxe", die: "1d8", type: "slashing" },
+  { name: "Warhammer", die: "1d8", type: "bludgeoning" },
+  { name: "War Pick", die: "1d8", type: "piercing" },
+  { name: "Morningstar", die: "1d8", type: "piercing" },
+  { name: "Flail", die: "1d8", type: "bludgeoning" },
+  { name: "Mace", die: "1d6", type: "bludgeoning" },
+  { name: "Quarterstaff", die: "1d6", type: "bludgeoning" },
+  { name: "Spear", die: "1d6", type: "piercing" },
+  { name: "Handaxe", die: "1d6", type: "slashing" },
+  { name: "Trident", die: "1d6", type: "piercing" },
+  // finesse
+  { name: "Rapier", die: "1d8", type: "piercing", finesse: true },
+  { name: "Shortsword", die: "1d6", type: "piercing", finesse: true },
+  { name: "Scimitar", die: "1d6", type: "slashing", finesse: true },
+  { name: "Dagger", die: "1d4", type: "piercing", finesse: true },
+  { name: "Whip", die: "1d4", type: "slashing", finesse: true, reach10: true },
+  // ranged
+  { name: "Longbow", die: "1d8", type: "piercing", ranged: true },
+  { name: "Shortbow", die: "1d6", type: "piercing", ranged: true },
+  { name: "Heavy Crossbow", die: "1d10", type: "piercing", ranged: true },
+  { name: "Hand Crossbow", die: "1d6", type: "piercing", ranged: true },
+  { name: "Light Crossbow", die: "1d8", type: "piercing", ranged: true },
+  { name: "Dart", die: "1d4", type: "piercing", ranged: true, finesse: true },
+  { name: "Sling", die: "1d4", type: "bludgeoning", ranged: true },
+];
+export const WEAPON_OPTIONS: string[] = WEAPONS.map((w) => w.name);
+
+/** Rebuild the base `attack` routine around a specific weapon: its die, damage
+ *  type, and to-hit ability. Swing count and extra riders (sneak dice, Divine
+ *  Smite, elemental brands) are untouched; feats run AFTER this. A ranged
+ *  weapon also flips the AI to keep-its-distance. */
+export function applyWeapon(c: Combatant, weaponName: string, level: number): { c: Combatant; notes: string[] } {
+  const w = WEAPONS.find((x) => x.name.toLowerCase() === weaponName.toLowerCase());
+  if (!w) return { c, notes: [`weapon "${weaponName}" not recognised — kept the build's default`] };
+  const strMod = mod(c.abilities.str);
+  const dexMod = mod(c.abilities.dex);
+  const abil = w.ranged ? dexMod : w.finesse ? Math.max(strMod, dexMod) : strMod;
+  const pb = pbForLevel(level);
+  const modStr = abil >= 0 ? `+${abil}` : `${abil}`;
+
+  let out = mutateWeaponSwings(c, (e) => {
+    let replaced = false;
+    const onHit = e.onHit.map((h) => {
+      if (replaced || h.type !== "damage" || !DIE_ONLY.test(h.amount)) return h;
+      replaced = true;
+      return { ...h, amount: `${w.die}${modStr}`, damageType: w.type };
+    });
+    if (!replaced) onHit.unshift({ type: "damage", amount: `${w.die}${modStr}`, damageType: w.type });
+    return { ...e, bonus: pb + abil, onHit };
+  });
+
+  if (w.reach10) {
+    out = {
+      ...out,
+      actions: out.actions.map((a) =>
+        a.id === "attack" && !/reach 10/i.test(a.text ?? "")
+          ? { ...a, text: `${a.text ? a.text + " " : ""}(reach 10 ft)` }
+          : a,
+      ),
+    };
+  }
+  if (w.ranged) out = { ...out, ai: { ...out.ai, keepDistance: true } };
+
+  return {
+    c: out,
+    notes: [
+      `weapon: ${w.name} — ${w.die} ${w.type}, ${w.ranged ? "ranged (DEX)" : w.finesse ? "finesse (best of STR/DEX)" : "STR"}` +
+        (w.reach10 ? ", 10 ft reach" : ""),
+    ],
+  };
+}
+
 // -------------------------------- feats ---------------------------------
 
 interface FeatDef {

@@ -16,6 +16,7 @@ import {
   loadoutSummary,
   monsterOptions,
   RACE_OPTIONS,
+  WEAPON_OPTIONS,
   npcNoteToMonster,
   parseStatblock,
   pcNoteToCombatant,
@@ -2321,6 +2322,7 @@ function PartyEditor({
                   const bits = [
                     loadoutSummary(p.loadout),
                     p.race,
+                    p.weapon,
                     (p.feats?.length ?? 0) + (p.items?.length ?? 0) > 0
                       ? `${(p.feats?.length ?? 0) + (p.items?.length ?? 0)} pick${(p.feats?.length ?? 0) + (p.items?.length ?? 0) === 1 ? "" : "s"}`
                       : "",
@@ -2359,6 +2361,15 @@ function PartyEditor({
                       <option value="">—</option>
                       {RACE_OPTIONS.map((r) => (
                         <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <span className="text-muted">Weapon</span>
+                    <select className="text-xs" value={p.weapon ?? ""} onChange={(e) => patch(i, { weapon: e.target.value || undefined })}>
+                      <option value="">auto (by class + STR/DEX)</option>
+                      {WEAPON_OPTIONS.map((w) => (
+                        <option key={w} value={w}>{w}</option>
                       ))}
                     </select>
                   </label>

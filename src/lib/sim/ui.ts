@@ -61,6 +61,8 @@ import {
   RACE_OPTIONS,
   FEAT_OPTIONS,
   ITEM_OPTIONS,
+  WEAPON_OPTIONS,
+  applyWeapon,
   type BuildMode,
 } from "./engine/pc-extras";
 
@@ -70,7 +72,7 @@ export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, Rost
 export type { AwaitingReaction, ReactionAsk, ReactionChoice };
 export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
-export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
+export { applyRace, applyFeats, applyItems, applyWeapon, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS, WEAPON_OPTIONS };
 
 // ------------------------------------------------------------- spell picker
 

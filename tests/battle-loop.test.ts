@@ -135,4 +135,17 @@ describe("battle mode — full grid fight", () => {
     expect(sawMiss).toBe(true);
     expect(sawBuff).toBe(true);
   });
+
+  it("an action headline reads before its consequences (drops, reactions)", () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const out = runBattle({ party: standardParty(3), enemies: ["hill-giant"], seed });
+      for (const f of out.frames) {
+        const t = f.text ?? "";
+        if (f.kind !== "action" && f.kind !== "legendary") continue;
+        const usesAt = t.search(/ uses /);
+        const subAt = t.search(/drops to 0 HP|is destroyed|rolls with it|casts Shield|casts Absorb Elements|Riposte/);
+        if (usesAt >= 0 && subAt >= 0) expect(subAt, `seed ${seed}: ${t}`).toBeGreaterThan(usesAt);
+      }
+    }
+  });
 });
