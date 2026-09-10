@@ -352,6 +352,12 @@ export const combatantSchema = z.object({
   saveBonusAll: z.number().int().default(0),      // flat bonus to every save (own aura, etc.)
   initiativeBonus: z.number().int().optional(),   // defaults to dex mod
 
+  // caster metadata (set by makeCaster) so the per-PC spell picker can rebuild
+  // the spell list from an already-built PC — the engine itself ignores these
+  spellClass: z.string().optional(),
+  casterKind: z.string().optional(),
+  spellAbility: abilitySchema.optional(),
+
   resistances: z.array(damageTypeSchema).default([]),
   resistancesNonmagical: z.array(damageTypeSchema).default([]), // "b/p/s from nonmagical attacks"
   immunities: z.array(damageTypeSchema).default([]),

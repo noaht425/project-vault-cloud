@@ -70,6 +70,7 @@ export function makeCaster(spec: CasterSpec): Combatant {
     ac: spec.ac, maxHp: spec.hp, speeds: { walk: 30 },
     abilities: spec.abilities, pb, proficientSaves: spec.proficientSaves,
     saveBonusAll: spec.saveBonusAll ?? 0,
+    spellClass: spec.spellClass, casterKind: spec.casterKind, spellAbility: spec.spellAbility,
     resistances: [], resistancesNonmagical: [], immunities: [], vulnerabilities: [],
     conditionImmunities: [], specialRules: [],
     resources: slotResources(spec.casterKind, spec.level),

@@ -35,8 +35,8 @@ import {
   type SweepOut,
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync, runDayAsync } from "@/lib/sim/runner";
-import { aoePreview, autoPlace, cellDistanceFt, rosterForSetup, rulerLine, starterBattleMap, visibleCells } from "@/lib/sim/ui";
-import type { AwaitAction, AwaitingInput, AwaitingReaction, BattleDecision, BattleMapDef, BattleRun, DayRun, ReactionChoice, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
+import { aoePreview, autoPlace, cellDistanceFt, classSpellIds, pcSpellClass, rosterForSetup, rulerLine, spellCatalog, starterBattleMap, visibleCells } from "@/lib/sim/ui";
+import type { AwaitAction, AwaitingInput, AwaitingReaction, BattleDecision, BattleMapDef, BattleRun, DayRun, ReactionChoice, RestKind, RosterEntry, SpellClass, SpellPick, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
 const TRIAL_CHOICES = [100, 250, 500, 1000];
@@ -2365,6 +2365,12 @@ function PartyEditor({
                   <PickList label="Feats" options={FEAT_OPTIONS} chosen={p.feats ?? []} onToggle={(v) => togglePick(i, "feats", v)} />
                   <PickList label="Items" options={ITEM_OPTIONS} chosen={p.items ?? []} onToggle={(v) => togglePick(i, "items", v)} />
                 </div>
+                <SpellPicker
+                  cls={pcSpellClass(p)}
+                  level={p.level}
+                  chosen={p.spells ?? []}
+                  onChange={(spells) => patch(i, { spells: spells.length ? spells : undefined })}
+                />
               </div>
             )}
           </li>
@@ -2890,6 +2896,126 @@ function PickList({
             <option key={o} value={o}>{o}</option>
           ))}
         </select>
+      )}
+    </div>
+  );
+}
+
+// ---- per-PC spell selection ----
+
+const ALL_SPELLS: SpellPick[] = spellCatalog();
+const SPELL_LEVEL_LABEL = (n: number) => (n === 0 ? "Cantrips" : `Level ${n}`);
+
+function SpellPicker({
+  cls,
+  level,
+  chosen,
+  onChange,
+}: {
+  cls: SpellClass | null;
+  level: number;
+  chosen: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [q, setQ] = useState("");
+  const chosenSet = useMemo(() => new Set(chosen), [chosen]);
+  const onList = useMemo(() => (cls ? new Set(classSpellIds(cls)) : new Set<string>()), [cls]);
+
+  // rough ceiling on spell level for this PC (full-caster fit; generous for half)
+  const maxLvl = showAll ? 9 : Math.min(9, Math.max(1, Math.ceil(level / 2)));
+  const rows = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    return ALL_SPELLS.filter((s) => {
+      if (chosenSet.has(s.id)) return !query || s.name.toLowerCase().includes(query);
+      if (!showAll && !onList.has(s.id)) return false;
+      if (s.level > maxLvl) return false;
+      if (query && !s.name.toLowerCase().includes(query)) return false;
+      return true;
+    });
+  }, [showAll, onList, chosenSet, q, maxLvl]);
+
+  const byLevel = useMemo(() => {
+    const m = new Map<number, SpellPick[]>();
+    for (const s of rows) (m.get(s.level) ?? m.set(s.level, []).get(s.level)!).push(s);
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [rows]);
+
+  const toggle = (id: string) =>
+    onChange(chosen.includes(id) ? chosen.filter((x) => x !== id) : [...chosen, id]);
+
+  if (!cls) {
+    return (
+      <div className="pt-1.5 border-t border-border/60 text-muted">
+        Spells: <span className="opacity-70">not a spellcaster</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pt-1.5 border-t border-border/60 flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button className="text-accent hover:underline" onClick={() => setOpen((v) => !v)}>
+          {open ? "▾ spells" : "▸ spells"}
+        </button>
+        <span className="text-muted">
+          {chosen.length
+            ? `${chosen.length} chosen — the sim casts only these`
+            : `auto (a level-appropriate ${cls} list)`}
+        </span>
+        {chosen.length > 0 && (
+          <button className="text-muted hover:text-normal" onClick={() => onChange([])}>
+            reset to auto
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="flex flex-col gap-1.5 max-w-[30rem]">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+              show off-list spells
+            </label>
+            <input
+              className="text-xs px-1.5 py-0.5 rounded border border-border bg-panel flex-1 min-w-32"
+              placeholder="filter by name…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto flex flex-col gap-1 pr-1">
+            {byLevel.map(([lvl, list]) => (
+              <div key={lvl}>
+                <div className="text-muted/70 uppercase tracking-wide text-[10px] mt-1">{SPELL_LEVEL_LABEL(lvl)}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                  {list.map((s) => (
+                    <label
+                      key={s.id}
+                      className={`flex items-center gap-1.5 ${s.simulated ? "" : "text-muted/50"}`}
+                      title={
+                        (s.simulated ? "" : "not simulated — utility / no combat effect. ") +
+                        (s.concentration ? "concentration. " : "") +
+                        (!onList.has(s.id) ? "off your class list" : "")
+                      }
+                    >
+                      <input type="checkbox" checked={chosenSet.has(s.id)} onChange={() => toggle(s.id)} />
+                      <span className="truncate">
+                        {s.name}
+                        {s.reaction ? " ⚡" : ""}
+                        {s.concentration ? " ◎" : ""}
+                        {!s.simulated ? " ·" : ""}
+                        {!onList.has(s.id) ? <span className="text-warning/70"> ▸off-list</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {byLevel.length === 0 && <span className="text-muted">no spells match</span>}
+          </div>
+          <span className="text-muted/60 text-[10px]">⚡ reaction · ◎ concentration · · not simulated</span>
+        </div>
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { MINIONS } from "./engine/minions";
 import { TEMPLATE_IDS, makeTemplate, type Loadout } from "./engine/templates";
 import { makeCaster } from "./spells/caster";
 import { maxSlotLevel } from "./spells/slots";
+import { SPELLS, spellsForClass } from "./spells/catalog";
 import type { SpellClass } from "./spells/types";
 import type { CasterKind } from "./spells/slots";
 import { encounterBudget } from "./encounterBudget";
@@ -64,11 +65,59 @@ import {
 } from "./engine/pc-extras";
 
 export type { PartyMemberSpec, MonteCarloResult, CombatResult, Loadout, Combatant, Ability, DamageType, Condition, Size, BuildMode };
+export type { SpellClass };
 export type { BattleFrame, UnitSnap, BattleGrid, BattleMapDef, RosterEntry, RosterInit, AwaitingInput, AwaitAction, AwaitUnit, BattleDecision };
 export type { AwaitingReaction, ReactionAsk, ReactionChoice };
 export { autoPlace, tilesToString };
 export { standardParty, TEMPLATE_IDS, ABILITIES, DAMAGE_TYPES, SIZES };
 export { applyRace, applyFeats, applyItems, raceKey, RACE_OPTIONS, FEAT_OPTIONS, ITEM_OPTIONS };
+
+// ------------------------------------------------------------- spell picker
+
+const TEMPLATE_SPELL_CLASS: Record<string, SpellClass> = {
+  "blaster-wizard": "wizard", "life-cleric": "cleric", "vengeance-paladin": "paladin",
+  "hunter-ranger": "ranger", "draconic-sorcerer": "sorcerer", "moon-druid": "druid",
+  "lore-bard": "bard", "warlock": "warlock",
+};
+const REACTION_MODELLED = new Set(["shield", "counterspell", "absorb-elements", "hellish-rebuke"]);
+
+/** the spell class of a party spec, or null if it isn't a spellcaster */
+export function pcSpellClass(spec: { template?: string; combatant?: Combatant }): SpellClass | null {
+  const stamped = spec.combatant?.spellClass as SpellClass | undefined;
+  if (stamped) return stamped;
+  return spec.template ? TEMPLATE_SPELL_CLASS[spec.template] ?? null : null;
+}
+
+export interface SpellPick {
+  id: string;
+  name: string;
+  level: number; // 0 = cantrip
+  school: string;
+  classes: string[];
+  concentration: boolean;
+  reaction: boolean;
+  /** the sim actually resolves this spell (has a build, or a reaction hook) */
+  simulated: boolean;
+}
+
+/** every SRD spell, for the per-PC picker; sorted by level then name */
+export function spellCatalog(): SpellPick[] {
+  return SPELLS.map((s) => ({
+    id: s.id,
+    name: s.name,
+    level: s.level,
+    school: s.school,
+    classes: s.classes,
+    concentration: !!s.concentration,
+    reaction: s.castTime === "reaction",
+    simulated: !!s.build || REACTION_MODELLED.has(s.id),
+  })).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+}
+
+/** spell ids on a class's list */
+export function classSpellIds(cls: SpellClass): string[] {
+  return spellsForClass(cls).map((s) => s.id);
+}
 
 /** map a PC note's class string to the nearest sim template */
 export function classToTemplate(cls: string): string {

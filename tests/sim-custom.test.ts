@@ -722,3 +722,35 @@ The bonus increases to +2.`;
     expect(c.actions.filter((a) => a.isSpell).every((a) => a.automation != null)).toBe(true);
   });
 });
+
+describe("per-PC spell picker", () => {
+  it("replaces a caster's spell list with the chosen ids", async () => {
+    const { buildParty } = await import("../src/lib/sim/engine/scenario");
+    const pc = buildParty([
+      { template: "blaster-wizard", name: "Cy", level: 9, spells: ["fire-bolt", "fireball", "shield", "counterspell"] },
+    ])[0];
+    const ids = pc.actions.map((a) => a.id);
+    expect(ids).toContain("cast-fire-bolt");
+    expect(ids.some((x) => x.startsWith("cast-fireball"))).toBe(true);
+    expect(pc.reactions.map((r) => r.id)).toEqual(expect.arrayContaining(["shield", "counterspell"]));
+    // auto-prepared staples that weren't picked are gone
+    expect(ids.some((x) => x.startsWith("cast-magic-missile"))).toBe(false);
+    // the weapon fallback survives
+    expect(ids).toContain("attack");
+  });
+
+  it("stamps caster metadata so an imported PC can be re-spelled", async () => {
+    const { CASTER_BUILDERS } = await import("../src/lib/sim/spells/casterTemplates");
+    const w = CASTER_BUILDERS["blaster-wizard"](9);
+    expect(w.spellClass).toBe("wizard");
+    expect(w.casterKind).toBe("full");
+    expect(w.spellAbility).toBe("int");
+  });
+
+  it("ignores spell picks on a non-caster", async () => {
+    const { buildParty } = await import("../src/lib/sim/engine/scenario");
+    const a = buildParty([{ template: "gwm-fighter", name: "Bt", level: 9 }])[0];
+    const b = buildParty([{ template: "gwm-fighter", name: "Bt", level: 9, spells: ["fireball"] }])[0];
+    expect(b.actions.map((x) => x.id)).toEqual(a.actions.map((x) => x.id));
+  });
+});
