@@ -148,4 +148,26 @@ describe("battle mode — full grid fight", () => {
       }
     }
   });
+
+  it("a named melee attack (Bite / Claw / …) respects reach, not just actions called Attack", () => {
+    const grid = gridFromDef({ width: 30, height: 12, tiles: ".".repeat(360), placements: {} });
+    const ftGap = (a: { x: number; y: number; fp: number }, b: { x: number; y: number; fp: number }) => {
+      const gx = Math.max(0, a.x - (b.x + b.fp - 1), b.x - (a.x + a.fp - 1));
+      const gy = Math.max(0, a.y - (b.y + b.fp - 1), b.y - (a.y + a.fp - 1));
+      return Math.max(gx, gy) * 5 + Math.floor(Math.min(gx, gy) / 2) * 5;
+    };
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const out = runBattle({ party: standardParty(5), enemies: ["dire-wolf x3"], seed, grid });
+      for (const f of out.frames) {
+        if (f.kind !== "action" || !f.actorId || !/Bite/i.test(f.text ?? "")) continue;
+        if (!/-\d+ \(/.test(f.text ?? "")) continue; // only frames where the bite dealt damage
+        const a = f.units.find((u) => u.id === f.actorId)!;
+        if (a.side !== "monster") continue;
+        const pcs = f.units.filter((u) => u.side === "party" && u.alive);
+        if (!pcs.length) continue;
+        const nearest = Math.min(...pcs.map((u) => ftGap(a, u)));
+        expect(nearest, `seed ${seed} R${f.round}: ${f.text}`).toBeLessThanOrEqual(10);
+      }
+    }
+  });
 });

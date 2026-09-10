@@ -51,6 +51,31 @@ function actionHasAoe(a: Action): boolean {
   return a.automation.some(isAoeNode);
 }
 
+/** does this action (following useAction / branch) ever make an attack roll? */
+export function actionMakesAttacks(u: CombatantState, a: Action, seen = new Set<string>()): boolean {
+  if (seen.has(a.id)) return false;
+  seen.add(a.id);
+  const walk = (nodes: AutomationNode[]): boolean =>
+    nodes.some((n) => {
+      if (n.type === "attack") return true;
+      if (n.type === "target") return walk(n.effects);
+      if (n.type === "branch") return walk(n.then) || (n.else ? walk(n.else) : false);
+      if (n.type === "useAction") {
+        const sub = u.ref.actions.find((x) => x.id === n.action);
+        return sub ? actionMakesAttacks(u, sub, seen) : false;
+      }
+      return false;
+    });
+  return walk(a.automation);
+}
+
+/** the action's text/name reads as a ranged / thrown attack (so the attacker
+ *  doesn't need to close to melee) */
+function isRangedAction(a: Action): boolean {
+  const t = `${a.name} ${a.text ?? ""}`;
+  return /\brange(?:d)?\b|\brange \d|\b\d{1,3}\/\d{2,3}\b|longbow|shortbow|crossbow|\bsling\b|blowgun|javelin|hand ?axe|\bdart\b|\bbolt\b|\brock\b|\bspit\b|hurl|thrown|\bweb\b|\bbreath\b|\bray\b|\bbeam\b|\bshot\b/i.test(t);
+}
+
 /** the enemy this unit should aim at: the side's shared focus if it's sane, else grid-nearest with sight */
 function pickTarget(state: BattleState, u: CombatantState): CombatantState | undefined {
   const foes = livingEnemies(state, u);
@@ -127,9 +152,14 @@ export function planTurn(state: BattleState, u: CombatantState): BattleIntentPla
       plan.templateCells = t.cells;
     }
   }
-  // melee if it's a weapon routine and the unit isn't a deliberate skirmisher
-  const weaponRoutine = action.id === "attack" || action.id === "multiattack" || /multiattack|attack/i.test(action.name);
-  plan.needsMelee = weaponRoutine && !u.ref.ai.keepDistance && !actionHasAoe(action);
+  // "melee" = the action makes an attack roll, isn't an AoE or a ranged/thrown
+  // routine, and the unit isn't a deliberate skirmisher. Catches Bite / Claw /
+  // Slam / Gore / Tentacle etc., not just actions literally named "Attack".
+  plan.needsMelee =
+    actionMakesAttacks(u, action) &&
+    !actionHasAoe(action) &&
+    !isRangedAction(action) &&
+    !u.ref.ai.keepDistance;
   return plan;
 }
 

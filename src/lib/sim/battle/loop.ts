@@ -3,7 +3,6 @@
 // saves, end check — but with a movement phase and geometry-aware action
 // resolution, and it records a frame after every step.
 
-import type { Action, AutomationNode } from "../schema";
 import { abilityMod } from "../math";
 import {
   actionAvailable,
@@ -31,29 +30,11 @@ import {
 } from "../engine/state";
 import { resolveEnemies } from "../engine/scenario";
 import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
-import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
+import { actionMakesAttacks, attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
 import { BattleState, ReactionPause, canFly, deriveZones, nearestEnemyFt, recordFrame, unitReachFt } from "./state";
 
 const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
-
-/** does `action` (following `useAction` chains) ever make an attack roll? */
-function actionMakesAttacks(u: CombatantState, action: Action, seen = new Set<string>()): boolean {
-  if (seen.has(action.id)) return false;
-  seen.add(action.id);
-  const walk = (nodes: AutomationNode[]): boolean =>
-    nodes.some((n) => {
-      if (n.type === "attack") return true;
-      if (n.type === "target") return walk(n.effects);
-      if (n.type === "branch") return walk(n.then) || (n.else ? walk(n.else) : false);
-      if (n.type === "useAction") {
-        const sub = u.ref.actions.find((a) => a.id === n.action);
-        return sub ? actionMakesAttacks(u, sub, seen) : false;
-      }
-      return false;
-    });
-  return walk(action.automation);
-}
 
 /** first free anchor square for a footprint-`fp` creature along the given edge */
 function edgeAnchor(state: BattleState, fp: number, edge: string, occ: Set<string>): { x: number; y: number } | null {
