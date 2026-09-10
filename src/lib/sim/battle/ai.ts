@@ -145,9 +145,10 @@ function occupiedByOthers(state: BattleState, selfId: string): Set<string> {
   return s;
 }
 
-/** move `u` this turn according to `plan`. Records a "move" frame if it stepped. */
-export function reposition(state: BattleState, u: CombatantState, plan: BattleIntentPlan): void {
-  if (isIncapacitated(u) || !u.alive) return;
+/** move `u` this turn according to `plan`. Records a "move" frame if it stepped.
+ *  Returns whether it actually moved. */
+export function reposition(state: BattleState, u: CombatantState, plan: BattleIntentPlan): boolean {
+  if (isIncapacitated(u) || !u.alive) return false;
   const budget = speedFt(u);
   const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
   const start = posOf(state, u.id);
@@ -184,25 +185,27 @@ export function reposition(state: BattleState, u: CombatantState, plan: BattleIn
     }
   }
 
-  if (!endPath) return;
+  if (!endPath) return false;
 
   // opportunity attacks: resolve while the mover is still where it started and
   // adjacent enemies are still flagged "melee"
   const wasMelee = u.zone === "melee";
   if (wasMelee) {
     provokeOpportunityAttacks(state, u);
-    if (!u.alive || isIncapacitated(u)) return;
+    if (!u.alive || isIncapacitated(u)) return false;
   }
 
   const [ex, ey] = endPath[endPath.length - 1];
   state.pos.set(u.id, { x: ex, y: ey });
   deriveZones(state);
-  recordFrame(state, {
-    kind: "move",
-    actorId: u.id,
-    text: `${u.name} moves`,
-    path: endPath,
-  });
+  // if this was a melee approach that still hasn't closed, say how far is left
+  let text = `${u.name} moves`;
+  if (plan.needsMelee && target && target.alive) {
+    const left = feetBetweenBoxes(boxOfUnit(state, u), boxOfUnit(state, target));
+    if (left > myReach + 0.001) text = `${u.name} advances on ${target.name} — ${Math.round(left)} ft to go`;
+  }
+  recordFrame(state, { kind: "move", actorId: u.id, text, path: endPath });
+  return true;
 }
 
 function minEnemyGap(state: BattleState, u: CombatantState, box: Box): number {
@@ -245,13 +248,13 @@ export function geoTargetsFor(state: BattleState, u: CombatantState, plan: Battl
   };
 }
 
-/** the `attackMods` seam: cover -> +AC, and long range -> disadvantage. A ranged
- *  attacker (keepDistance, or firing from outside its own reach) shooting past
- *  ~120 ft is at its weapon's long range. Melee attacks never trip this — the
- *  attacker is adjacent. */
-export function attackModsFor(state: BattleState, u: CombatantState) {
+/** the `attackMods` seam: cover -> +AC, long range -> disadvantage, and (for a
+ *  melee routine) a target beyond the attacker's reach -> the swing can't land.
+ *  `needsMelee` is the plan's melee flag, so ranged attackers are never blocked. */
+export function attackModsFor(state: BattleState, u: CombatantState, needsMelee = false) {
   const LONG_RANGE_FT = 120;
-  return (target: CombatantState): { acBonus?: number; disadvantage?: boolean } => {
+  const reach = unitReachFt(u);
+  return (target: CombatantState): { acBonus?: number; disadvantage?: boolean; unreachable?: boolean } => {
     const me = boxOfUnit(state, u);
     const tb = boxOfUnit(state, target);
     const blockers: Box[] = [];
@@ -259,9 +262,13 @@ export function attackModsFor(state: BattleState, u: CombatantState) {
       if (!x.alive || x.id === u.id || x.id === target.id) continue;
       blockers.push(boxOfUnit(state, x));
     }
+    const gap = feetBetweenBoxes(me, tb);
     const cover = coverBetween(state.grid, me, tb, blockers);
-    const long = feetBetweenBoxes(me, tb) > LONG_RANGE_FT;
-    return { acBonus: coverAcBonus(cover), disadvantage: long || undefined };
+    return {
+      acBonus: coverAcBonus(cover),
+      disadvantage: gap > LONG_RANGE_FT || undefined,
+      unreachable: needsMelee && gap > reach + 0.001 ? true : undefined,
+    };
   };
 }
 

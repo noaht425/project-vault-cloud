@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runBattle } from "../src/lib/sim/battle";
-import { makeGrid, setTerrain } from "../src/lib/sim/battle/grid";
+import { gridFromDef, makeGrid, setTerrain } from "../src/lib/sim/battle/grid";
 import { standardParty } from "../src/lib/sim/engine/scenario";
 
 describe("battle mode — full grid fight", () => {
@@ -96,5 +96,43 @@ describe("battle mode — full grid fight", () => {
         if (/-\d+ \(/.test(f.text ?? "")) expect(ftGap, `seed ${seed} R${f.round}: ${f.text}`).toBeLessThanOrEqual(10);
       }
     }
+  });
+
+  it("no weapon damage lands while the attacker is far from every enemy (openers included)", () => {
+    const grid = gridFromDef({ width: 30, height: 30, tiles: ".".repeat(900), placements: {} });
+    const ftGap = (a: { x: number; y: number; fp: number }, b: { x: number; y: number; fp: number }) => {
+      const gx = Math.max(0, a.x - (b.x + b.fp - 1), b.x - (a.x + a.fp - 1));
+      const gy = Math.max(0, a.y - (b.y + b.fp - 1), b.y - (a.y + a.fp - 1));
+      return Math.max(gx, gy) * 5 + Math.floor(Math.min(gx, gy) / 2) * 5;
+    };
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const out = runBattle({ party: standardParty(11), enemies: ["troll"], seed, grid });
+      for (const f of out.frames) {
+        if (f.kind !== "action" || !f.actorId) continue;
+        if (!/Action Surge|Multiattack|Attack \+/.test(f.text ?? "") || !/-\d+ \(/.test(f.text ?? "")) continue;
+        const a = f.units.find((u) => u.id === f.actorId)!;
+        const foes = f.units.filter((u) => u.side !== a.side && u.alive);
+        if (!foes.length) continue;
+        const nearest = Math.min(...foes.map((u) => ftGap(a, u)));
+        expect(nearest, `seed ${seed} R${f.round}: ${f.text}`).toBeLessThanOrEqual(10);
+      }
+    }
+  });
+
+  it("a whiffed attack routine reads as a miss, and a buff shows what it applied", () => {
+    // level-16 party curbstomps a CR3 owlbear — plenty of monster whiffs + a Bless
+    let sawMiss = false;
+    let sawBuff = false;
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const out = runBattle({ party: standardParty(16), enemies: ["owlbear"], seed });
+      for (const f of out.frames) {
+        if (/\((all miss|misses)\)/.test(f.text ?? "")) sawMiss = true;
+        if (/Bless -> .*bless/.test(f.text ?? "")) sawBuff = true;
+        // "(no effect)" should not appear for a plain weapon multiattack any more
+        expect(f.text ?? "").not.toMatch(/Multiattack.*\(no effect\)/);
+      }
+    }
+    expect(sawMiss).toBe(true);
+    expect(sawBuff).toBe(true);
   });
 });

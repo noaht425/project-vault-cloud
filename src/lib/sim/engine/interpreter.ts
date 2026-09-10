@@ -48,8 +48,12 @@ interface RunCtx {
   /** battle mode only: geometry-aware target picker. Return null to fall back to
    *  the abstract `selectTargets`. Never set by the Monte-Carlo engine. */
   geoTargets?: (node: Extract<AutomationNode, { type: "target" }>, source: CombatantState) => CombatantState[] | null;
-  /** battle mode only: per-target attack tweaks (cover -> +AC, long range -> disadvantage) */
-  attackMods?: (target: CombatantState) => { acBonus?: number; disadvantage?: boolean };
+  /** battle mode only: per-target attack tweaks (cover -> +AC, long range -> disadvantage,
+   *  a melee routine whose target is out of reach -> the swing simply doesn't land) */
+  attackMods?: (target: CombatantState) => { acBonus?: number; disadvantage?: boolean; unreachable?: boolean };
+  /** running count of attack rolls this action made, so `runAction` can say
+   *  "misses" / "can't reach" instead of a flat "(no effect)" */
+  attackTally?: { rolled: number; hit: number; unreachable: boolean };
 }
 
 /** Options passed to `runAction`; `geo` seeds the battle-mode seams onto the root ctx. */
@@ -220,8 +224,16 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
         if (!t) break;
         const bonus = typeof node.bonus === "number" ? node.bonus : 12;
         const tweak = ctx.attackMods?.(t);
+        if (tweak?.unreachable) {
+          if (ctx.attackTally) ctx.attackTally.unreachable = true;
+          break; // out of melee reach — the swing never connects
+        }
         const adv = tweak?.disadvantage ? "dis" : node.adv;
         const res = rollAttack(state, source, t, bonus, adv, node.critRange ?? 20, tweak?.acBonus ?? 0);
+        if (ctx.attackTally) {
+          ctx.attackTally.rolled++;
+          if (res.hit) ctx.attackTally.hit++;
+        }
         const next: RunCtx = { ...ctx, last: { ...ctx.last, attackHit: res.hit, attackCrit: res.crit, attackAdv: res.hadAdvantage }, crit: res.crit, inAttack: true, depth: ctx.depth + 1 };
         if (res.hit) runAutomation(node.onHit, next);
         else if (node.onMiss) runAutomation(node.onMiss, next);
@@ -439,8 +451,10 @@ export function runAction(
 
   const before = hpSnapshot(state);
   const condsBefore = new Map([...state.units.values()].map((u) => [u.id, new Set(u.conditions.keys())]));
+  const fxBefore = new Map([...state.units.values()].map((u) => [u.id, new Set(u.effects.map((e) => e.name))]));
   const saveLog = new Map<string, boolean>();
-  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, spell, appliedNames, ...geo });
+  const attackTally = { rolled: 0, hit: 0, unreachable: false };
+  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, attackTally, spell, appliedNames, ...geo });
   if (action.concentration && appliedNames && appliedNames.length) {
     source.concentratingOn = action.id;
     source.concentrationEffects = [...new Set(appliedNames)];
@@ -454,14 +468,23 @@ export function runAction(
     // don't double-count it here. Ally healing still shows.
     if (u.side === source.side && u.id !== source.id && delta > 0) continue;
     const newConds = [...u.conditions.keys()].filter((c) => !condsBefore.get(u.id)?.has(c));
+    const newFx = u.effects.map((e) => e.name).filter((n) => !fxBefore.get(u.id)?.has(n));
     const bits: string[] = [];
     if (saveLog.has(u.id)) bits.push(saveLog.get(u.id) ? "save" : "FAIL");
     if (delta > 0) bits.push(`-${delta} (${Math.max(0, u.hp)}/${u.maxHp})`);
     else if (delta < 0) bits.push(`+${-delta} (${u.hp}/${u.maxHp})`);
     if (u.downed && (before.get(u.id) ?? 1) > 0) bits.push("DOWN");
     if (newConds.length) bits.push(newConds.join(","));
+    if (newFx.length) bits.push(newFx.join(","));
     if (bits.length) parts.push(`${u.name} ${bits.join(" ")}`);
   }
   const verb = opts.asLegendary ? "(legendary) " : opts.asReaction ? "(reaction) " : "";
-  say(state, `${source.name} ${verb}uses ${action.name}${parts.length ? " -> " + parts.join("; ") : " (no effect)"}`, source.id);
+  const tail = parts.length
+    ? " -> " + parts.join("; ")
+    : attackTally.unreachable && attackTally.rolled === 0
+      ? " (can't reach)"
+      : attackTally.rolled > 0
+        ? attackTally.rolled === 1 ? " (misses)" : " (all miss)"
+        : " (no effect)";
+  say(state, `${source.name} ${verb}uses ${action.name}${tail}`, source.id);
 }

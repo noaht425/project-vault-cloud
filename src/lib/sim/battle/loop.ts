@@ -3,6 +3,7 @@
 // saves, end check — but with a movement phase and geometry-aware action
 // resolution, and it records a frame after every step.
 
+import type { Action, AutomationNode } from "../schema";
 import { abilityMod } from "../math";
 import {
   actionAvailable,
@@ -29,13 +30,30 @@ import {
   type CombatantState,
 } from "../engine/state";
 import { resolveEnemies } from "../engine/scenario";
-import { feetBetweenBoxes } from "./geometry";
 import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
-import { BattleState, ReactionPause, boxOfUnit, deriveZones, recordFrame, unitReachFt } from "./state";
+import { BattleState, ReactionPause, deriveZones, nearestEnemyFt, recordFrame, unitReachFt } from "./state";
 
 const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
+
+/** does `action` (following `useAction` chains) ever make an attack roll? */
+function actionMakesAttacks(u: CombatantState, action: Action, seen = new Set<string>()): boolean {
+  if (seen.has(action.id)) return false;
+  seen.add(action.id);
+  const walk = (nodes: AutomationNode[]): boolean =>
+    nodes.some((n) => {
+      if (n.type === "attack") return true;
+      if (n.type === "target") return walk(n.effects);
+      if (n.type === "branch") return walk(n.then) || (n.else ? walk(n.else) : false);
+      if (n.type === "useAction") {
+        const sub = u.ref.actions.find((a) => a.id === n.action);
+        return sub ? actionMakesAttacks(u, sub, seen) : false;
+      }
+      return false;
+    });
+  return walk(action.automation);
+}
 
 /** first free anchor square for a footprint-`fp` creature along the given edge */
 function edgeAnchor(state: BattleState, fp: number, edge: string, occ: Set<string>): { x: number; y: number } | null {
@@ -206,28 +224,22 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
   }
 
   const plan = planTurn(state, u);
-  reposition(state, u, plan);
+  const moved = reposition(state, u, plan);
   if (!u.alive || isIncapacitated(u)) return;
   deriveZones(state);
 
-  const geo = { geoTargets: geoTargetsFor(state, u, plan), attackMods: attackModsFor(state, u) };
+  // the interpreter's attackMods seam also whiffs any melee swing from beyond reach
+  const geo = { geoTargets: geoTargetsFor(state, u, plan), attackMods: attackModsFor(state, u, plan.needsMelee) };
 
-  // a melee routine whose target is still out of reach after moving is WASTED,
-  // not resolved at range (mirrors the player-control guard in applyDecision)
-  const meleeTarget = plan.targetId ? state.units.get(plan.targetId) : undefined;
-  const meleeOutOfReach =
-    plan.needsMelee &&
-    !!meleeTarget &&
-    meleeTarget.alive &&
-    feetBetweenBoxes(boxOfUnit(state, u), boxOfUnit(state, meleeTarget)) > unitReachFt(u) + 0.001;
+  // a melee routine that ended the move still short of every enemy is a failed
+  // approach — don't run the doomed action at all (mirrors applyDecision's guard)
+  const meleeOutOfReach = plan.needsMelee && nearestEnemyFt(state, u) > unitReachFt(u) + 0.001;
 
-  // round-1 opener (Action Surge, Hunter's Mark, Frightful Presence, …) — skip a
-  // weapon-routine opener if we can't reach; self-buffs (Rage, Bless) still fire
+  // round-1 opener (Action Surge, Hunter's Mark, Frightful Presence, …) — skip an
+  // opener that swings if we can't reach; self-buffs (Rage, Bless) still fire
   if (state.round === 1 && u.ref.ai.opener.length) {
     const opener = pick(state, u, u.ref.ai.opener);
-    const openerIsWeapon =
-      !!opener && (opener.id === "attack" || opener.id === "multiattack" || /multiattack|attack/i.test(opener.name));
-    if (opener && !(meleeOutOfReach && openerIsWeapon)) {
+    if (opener && !(meleeOutOfReach && actionMakesAttacks(u, opener))) {
       spend(u, opener);
       markEconomy(u, opener);
       const text = runActionLogged(state, u, opener, { geo }, `${u.name} uses ${opener.name}`);
@@ -241,14 +253,16 @@ function takeBattleTurn(state: BattleState, u: CombatantState): void {
     }
   }
   if (u.actionUsedThisTurn) return;
+  // the opener may have finished the fight (or killed the only target in range)
+  if (state.ended || !livingEnemies(state, u).length) return;
 
   if (meleeOutOfReach) {
-    say(state, `${u.name} can't reach ${meleeTarget!.name} — the attack is wasted`, u.id);
-    recordFrame(state, {
-      kind: "action",
-      actorId: u.id,
-      text: `${u.name} closes in but can't reach ${meleeTarget!.name}`,
-    });
+    // if it spent the turn moving, the "move" frame already tells the story;
+    // only note it when the unit is genuinely stuck (no path, boxed in)
+    if (!moved) {
+      say(state, `${u.name} can't reach anyone and holds`, u.id);
+      recordFrame(state, { kind: "action", actorId: u.id, text: `${u.name} can't reach anyone and holds` });
+    }
     return;
   }
 
