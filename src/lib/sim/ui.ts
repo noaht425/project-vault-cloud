@@ -46,7 +46,7 @@ import {
   type RosterInit,
 } from "./battle";
 import { gridFromDef, makeGrid, tilesToString } from "./battle/grid";
-import { boxOf, coneCells, feetBetweenBoxes, hasLineOfSight, lineTemplateCells, sphereCells } from "./battle/geometry";
+import { boxOf, coneCells, feetBetweenBoxes, feetBetweenCells, hasLineOfSight, lineCells, lineTemplateCells, sphereCells } from "./battle/geometry";
 import type { BattleGrid, BattleMapDef } from "./battle/grid";
 import type { BattleFrame, UnitSnap } from "./battle/state";
 import type { AwaitingInput, AwaitAction, AwaitUnit, BattleDecision } from "./battle/control";
@@ -315,6 +315,16 @@ export function aoePreview(
         ? lineTemplateCells(g, from.x, from.y, origin.x, origin.y, sizeFt)
         : sphereCells(g, origin.x, origin.y, sizeFt);
   return [...set];
+}
+
+/** PHB 5-10-5 feet between two grid cells (single source of truth for the UI ruler) */
+export function cellDistanceFt(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return feetBetweenCells(a.x, a.y, b.x, b.y);
+}
+
+/** the integer cells a straight segment from A to B passes through, endpoints included */
+export function rulerLine(a: { x: number; y: number }, b: { x: number; y: number }): string[] {
+  return lineCells(a.x, a.y, b.x, b.y).map(([x, y]) => `${x},${y}`);
 }
 
 /** cell keys ("x,y") at least one viewer can see right now — line of sight (walls

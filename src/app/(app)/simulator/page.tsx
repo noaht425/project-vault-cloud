@@ -35,7 +35,7 @@ import {
   type SweepOut,
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync, runDayAsync } from "@/lib/sim/runner";
-import { aoePreview, autoPlace, rosterForSetup, starterBattleMap, visibleCells } from "@/lib/sim/ui";
+import { aoePreview, autoPlace, cellDistanceFt, rosterForSetup, rulerLine, starterBattleMap, visibleCells } from "@/lib/sim/ui";
 import type { AwaitAction, AwaitingInput, AwaitingReaction, BattleDecision, BattleMapDef, BattleRun, DayRun, ReactionChoice, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
@@ -638,11 +638,11 @@ function Replay({
   const targetsEnemy = !!selAction && !selAction.friendly && !selAction.aoe;
   const needsOrigin = !!selAction?.aoe;
   // rough 5-10-5 feet from a 1x1 square to a footprint box (just for the "out of reach" hint)
+  // PHB 5-10-5 feet from a 1x1 square to a footprint box (matches the engine's feetBetweenBoxes)
   const roughFt = (mx: number, my: number, b: { x0: number; y0: number; x1: number; y1: number }) => {
     const gx = Math.max(0, mx - b.x1, b.x0 - mx);
     const gy = Math.max(0, my - b.y1, b.y0 - my);
-    const diag = Math.min(gx, gy);
-    return (Math.max(gx, gy) + diag) * 5 + Math.floor(diag / 2) * 5;
+    return Math.max(gx, gy) * 5 + Math.floor(Math.min(gx, gy) / 2) * 5;
   };
   const meleeGap =
     awaiting && selAction?.needsMelee && wiz.target
@@ -665,7 +665,26 @@ function Replay({
           ? "bonusTarget"
           : "move";
 
+  // ---- measurement ruler (works while spectating or during a turn) ----
+  const [measure, setMeasure] = useState(false);
+  const [mA, setMA] = useState<{ x: number; y: number } | null>(null);
+  const [mB, setMB] = useState<{ x: number; y: number } | null>(null);
+  const [mHover, setMHover] = useState<{ x: number; y: number } | null>(null);
+  const cellFt = cellDistanceFt;
+  const rulerCells = useMemo(() => {
+    const end = mB ?? mHover;
+    return mA && end ? new Set(rulerLine(mA, end)) : new Set<string>();
+  }, [mA, mB, mHover]);
+  const rulerFt = mA && (mB ?? mHover) ? cellFt(mA, (mB ?? mHover)!) : null;
+  const measuring = measure && !awaiting && !reaction;
+  const stopMeasure = () => { setMeasure(false); setMA(null); setMB(null); setMHover(null); };
+
   const clickCell = (x: number, y: number, u?: UnitSnap) => {
+    if (measuring) {
+      if (!mA || mB) { setMA({ x, y }); setMB(null); }
+      else setMB({ x, y });
+      return;
+    }
     if (!awaiting) return;
     if (step === "target") {
       if (u && u.side === "monster" && u.alive) setWiz({ ...wiz, target: u.id });
@@ -860,6 +879,13 @@ function Replay({
               <input type="checkbox" checked={fog} onChange={(e) => setFog(e.target.checked)} />
               🌫 fog
             </label>
+            <button
+              className={`text-xs whitespace-nowrap ${measure ? "text-positive" : "text-muted hover:text-normal"}`}
+              onClick={() => (measure ? stopMeasure() : setMeasure(true))}
+              title="click two cells to measure the distance"
+            >
+              📏 measure
+            </button>
             <span className="text-xs text-muted/60 hidden sm:inline">space · ← → · home/end</span>
           </div>
         </>
@@ -875,14 +901,24 @@ function Replay({
 
       {/* current event line, mockup-style */}
       <p className="font-mono text-xs min-h-4">
-        <span className="text-muted">R{frame.round}:</span>{" "}
-        <span className="text-normal">{frame.text ?? (frame.kind === "start" ? "the battle begins" : frame.kind === "end" ? "" : "…")}</span>
+        {measuring ? (
+          <span className="text-positive">
+            📏 {mA ? `A (${mA.x + 1},${mA.y + 1})` : "click a start cell"}
+            {rulerFt != null && ` → ${mB ? `B (${mB.x + 1},${mB.y + 1})` : "…"}  =  ${rulerFt} ft (${rulerFt / 5} sq)`}
+            {mB && "  ·  click again to restart"}
+          </span>
+        ) : (
+          <>
+            <span className="text-muted">R{frame.round}:</span>{" "}
+            <span className="text-normal">{frame.text ?? (frame.kind === "start" ? "the battle begins" : frame.kind === "end" ? "" : "…")}</span>
+          </>
+        )}
       </p>
 
       <div className="flex gap-5 flex-wrap items-start">
         <div className="overflow-x-auto">
           <div
-            className={`inline-grid font-mono leading-none select-none text-muted/40 ${awaiting ? "cursor-pointer" : ""}`}
+            className={`inline-grid font-mono leading-none select-none text-muted/40 ${awaiting || measuring ? "cursor-pointer" : ""}`}
             style={{ gridTemplateColumns: `2.5ch 1ch repeat(${dims.width}, 1ch) 1ch`, fontSize: "13px" }}
           >
             {Array.from({ length: dims.height + 2 }, (_, ry) => {
@@ -938,17 +974,30 @@ function Replay({
                     }
                     if (!bg && u?.isActor) bg = "bg-accent/20 rounded-sm";
                     else if (!bg && templateSet.has(key)) bg = "bg-warning/20";
+                    if (measure) {
+                      if ((mA && mA.x === x && mA.y === y) || (mB && mB.x === x && mB.y === y))
+                        bg = "bg-positive/50 rounded-sm ring-1 ring-positive";
+                      else if (rulerCells.has(key)) bg = "bg-positive/20";
+                    }
                     const distTip =
-                      awaiting && step === "move" && !u
-                        ? `${roughFt(awaiting.pos.x, awaiting.pos.y, { x0: x, y0: y, x1: x, y1: y })} ft`
-                        : undefined;
+                      measuring && mA
+                        ? `${cellFt(mA, { x, y })} ft from A`
+                        : awaiting && step === "move" && !u
+                          ? `${roughFt(awaiting.pos.x, awaiting.pos.y, { x0: x, y0: y, x1: x, y1: y })} ft`
+                          : undefined;
                     return (
                       <span
                         key={x}
                         className={`text-center ${cls} ${bg}`}
                         style={{ height: "1.15em" }}
-                        onClick={awaiting ? () => clickCell(x, y, u) : undefined}
-                        onMouseEnter={awaiting && step === "origin" ? () => setHoverOrigin({ x, y }) : undefined}
+                        onClick={awaiting || measuring ? () => clickCell(x, y, u) : undefined}
+                        onMouseEnter={
+                          measuring && mA && !mB
+                            ? () => setMHover({ x, y })
+                            : awaiting && step === "origin"
+                              ? () => setHoverOrigin({ x, y })
+                              : undefined
+                        }
                         onMouseLeave={awaiting && step === "origin" ? () => setHoverOrigin(null) : undefined}
                         title={
                           u

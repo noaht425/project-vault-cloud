@@ -197,3 +197,20 @@ describe("fog of war — visibleCells", () => {
     expect(all.has("9,3")).toBe(true);
   });
 });
+
+describe("measurement ruler helpers", () => {
+  it("cellDistanceFt matches PHB 5-10-5", async () => {
+    const { cellDistanceFt } = await import("../src/lib/sim/ui");
+    expect(cellDistanceFt({ x: 0, y: 0 }, { x: 3, y: 0 })).toBe(15);   // 3 straight
+    expect(cellDistanceFt({ x: 0, y: 0 }, { x: 3, y: 3 })).toBe(20);   // 3 diagonal = 5+10+5
+    expect(cellDistanceFt({ x: 14, y: 2 }, { x: 10, y: 8 })).toBe(40); // 2 straight + 4 diag
+    expect(cellDistanceFt({ x: 12, y: 2 }, { x: 2, y: 8 })).toBe(65);  // 4 straight + 6 diag
+  });
+  it("rulerLine returns a connected cell path including both endpoints", async () => {
+    const { rulerLine } = await import("../src/lib/sim/ui");
+    const line = rulerLine({ x: 1, y: 1 }, { x: 4, y: 3 });
+    expect(line[0]).toBe("1,1");
+    expect(line[line.length - 1]).toBe("4,3");
+    expect(line.length).toBeGreaterThanOrEqual(4);
+  });
+});
