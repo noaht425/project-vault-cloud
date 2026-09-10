@@ -30,6 +30,16 @@ export interface BattleState extends CombatState {
   /** set when the loop stopped on a controlled unit that has no decision yet */
   awaiting?: AwaitingInput;
   pausedForInput?: boolean;
+  /** reinforcement waves: extra monsters that arrive at a map edge on a given round */
+  waves?: Wave[];
+  spawnedWaves: Set<number>;
+}
+
+export interface Wave {
+  round: number;
+  /** enemy id strings ("id" / "id x3") */
+  enemies: string[];
+  edge: "top" | "bottom" | "left" | "right";
 }
 
 export interface BattleIntent {
@@ -66,7 +76,7 @@ export interface UnitSnap {
 export interface BattleFrame {
   round: number;
   seq: number;
-  kind: "start" | "turn" | "move" | "action" | "legendary" | "lair" | "reaction" | "end";
+  kind: "start" | "turn" | "move" | "action" | "legendary" | "lair" | "reaction" | "reinforce" | "end";
   actorId?: string;
   text?: string;
   /** kind "move": anchor squares walked, start..end inclusive */

@@ -21,16 +21,88 @@ import {
 } from "../engine/loop";
 import { applyDamage, rollSave } from "../engine/resolve";
 import {
+  initCombatant,
   isIncapacitated,
   livingEnemies,
   say,
   startTurnEconomy,
   type CombatantState,
 } from "../engine/state";
-import { TERRAIN_GLYPH, footprint, terrainAt } from "./grid";
+import { resolveEnemies } from "../engine/scenario";
+import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
 import { BattleState, deriveZones, recordFrame } from "./state";
+
+const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
+
+/** first free anchor square for a footprint-`fp` creature along the given edge */
+function edgeAnchor(state: BattleState, fp: number, edge: string, occ: Set<string>): { x: number; y: number } | null {
+  const { width: w, height: h } = state.grid;
+  const fits = (x: number, y: number): boolean => {
+    for (let dy = 0; dy < fp; dy++)
+      for (let dx = 0; dx < fp; dx++) {
+        const cx = x + dx;
+        const cy = y + dy;
+        if (!inBounds(state.grid, cx, cy) || blocksMove(terrainAt(state.grid, cx, cy)) || occ.has(`${cx},${cy}`)) return false;
+      }
+    return true;
+  };
+  const lanes = edge === "top" || edge === "bottom" ? w : h;
+  const cx = Math.floor(lanes / 2);
+  const order: number[] = [];
+  for (let d = 0; d < lanes; d++) {
+    order.push(cx + d);
+    if (d) order.push(cx - d);
+  }
+  const depth = edge === "top" || edge === "bottom" ? h : w;
+  for (let layer = 0; layer < depth; layer++) {
+    for (const p of order) {
+      const x = edge === "left" ? layer : edge === "right" ? w - 1 - layer - (fp - 1) : p;
+      const y = edge === "top" ? layer : edge === "bottom" ? h - 1 - layer - (fp - 1) : p;
+      if (fits(x, y)) return { x, y };
+    }
+  }
+  return null;
+}
+
+function spawnWaves(state: BattleState): void {
+  if (!state.waves) return;
+  const occ = new Set<string>();
+  for (const u of state.units.values()) {
+    if (!u.alive) continue;
+    const p = state.pos.get(u.id);
+    if (!p) continue;
+    const fp = footprint(u.ref.size);
+    for (let dy = 0; dy < fp; dy++) for (let dx = 0; dx < fp; dx++) occ.add(`${p.x + dx},${p.y + dy}`);
+  }
+  let mi = [...state.units.values()].filter((u) => u.side === "monster").length;
+
+  for (let wi = 0; wi < state.waves.length; wi++) {
+    const wave = state.waves[wi];
+    if (wave.round !== state.round || state.spawnedWaves.has(wi)) continue;
+    state.spawnedWaves.add(wi);
+    const mons = resolveEnemies(wave.enemies, state.summonRegistry);
+    const names: string[] = [];
+    for (const ref of mons) {
+      const ms = initCombatant(ref, "monster", `~w${wi}.${names.length}`);
+      ms.name = ref.name; // resolveEnemies already numbered duplicates
+      const a = edgeAnchor(state, footprint(ref.size), wave.edge, occ);
+      if (!a) continue;
+      const fp = footprint(ref.size);
+      for (let dy = 0; dy < fp; dy++) for (let dx = 0; dx < fp; dx++) occ.add(`${a.x + dx},${a.y + dy}`);
+      state.units.set(ms.id, ms);
+      state.order.push(ms.id);
+      state.pos.set(ms.id, a);
+      state.glyphs.set(ms.id, monsterGlyph(mi++));
+      names.push(ms.name);
+    }
+    if (names.length) {
+      deriveZones(state);
+      recordFrame(state, { kind: "reinforce", text: `Reinforcements arrive from the ${wave.edge}: ${names.join(", ")}` });
+    }
+  }
+}
 
 function rollInitiative(state: BattleState): void {
   for (const u of state.units.values()) {
@@ -205,6 +277,7 @@ export function runBattleLoop(state: BattleState): void {
 
   while (!state.ended && !state.pausedForInput && state.round < state.maxRounds) {
     state.round++;
+    spawnWaves(state);
     for (const u of state.units.values()) {
       const precog = u.ref.specialRules.find((r) => r.rule === "d20Replacement");
       if (precog && precog.rule === "d20Replacement") u.d20SwapsLeft = precog.perRound;

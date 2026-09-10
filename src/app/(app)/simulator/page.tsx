@@ -235,6 +235,11 @@ export default function SimulatorPage() {
               onChange={(battleMap) => persist({ ...setup, battleMap })}
               onReset={() => { persist({ ...setup, battleMap: undefined }); setEditingMap(false); }}
             />
+            <WaveEditor
+              options={options}
+              waves={setup.battleWaves ?? []}
+              onChange={(battleWaves) => persist({ ...setup, battleWaves: battleWaves.length ? battleWaves : undefined })}
+            />
           </>
         )}
       </section>
@@ -2295,6 +2300,93 @@ function DamageList({ title, rows }: { title: string; rows: { name: string; avgD
 }
 
 // --------------------------------------------------------------- sweep table
+
+// ------------------------------------------------------------- reinforcement waves
+
+type Wave = NonNullable<SimSetup["battleWaves"]>[number];
+const EDGES = ["top", "bottom", "left", "right"] as const;
+
+function WaveEditor({
+  options,
+  waves,
+  onChange,
+}: {
+  options: MonsterOption[];
+  waves: Wave[];
+  onChange: (w: Wave[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const patch = (i: number, m: Partial<Wave>) => onChange(waves.map((w, x) => (x === i ? { ...w, ...m } : w)));
+  const addMon = (i: number, id: string) => {
+    if (!id) return;
+    const enc = waves[i].enemies;
+    const ex = enc.find((e) => e.id === id);
+    patch(i, { enemies: ex ? enc.map((e) => (e.id === id ? { ...e, count: e.count + 1 } : e)) : [...enc, { id, count: 1 }] });
+  };
+  const bump = (i: number, id: string, d: number) =>
+    patch(i, {
+      enemies: waves[i].enemies.flatMap((e) => (e.id !== id ? [e] : e.count + d <= 0 ? [] : [{ ...e, count: e.count + d }])),
+    });
+
+  return (
+    <div className="flex flex-col gap-2 border border-border rounded bg-panel/50 p-2">
+      <div className="flex items-center gap-3 flex-wrap text-xs">
+        <button className="text-accent hover:underline" onClick={() => setOpen((v) => !v)}>
+          {open ? "▾ hide reinforcements" : "▸ reinforcements"}
+        </button>
+        <span className="text-muted">{waves.length ? `${waves.length} wave${waves.length === 1 ? "" : "s"}` : "none"}</span>
+      </div>
+      {open && (
+        <div className="flex flex-col gap-2 text-xs">
+          {waves.map((w, i) => (
+            <div key={i} className="flex flex-col gap-1.5 border border-border rounded p-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-muted">arrives round</span>
+                <Stepper value={w.round} min={1} max={30} onChange={(round) => patch(i, { round })} />
+                <span className="text-muted">from</span>
+                <select className="text-xs" value={w.edge} onChange={(e) => patch(i, { edge: e.target.value as Wave["edge"] })}>
+                  {EDGES.map((ed) => (
+                    <option key={ed} value={ed}>{ed}</option>
+                  ))}
+                </select>
+                <select
+                  className="text-xs min-w-36"
+                  value=""
+                  onChange={(e) => addMon(i, e.target.value)}
+                >
+                  <option value="">add a monster…</option>
+                  {options.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name} — CR {o.cr}</option>
+                  ))}
+                </select>
+                <button className="text-muted hover:text-danger ml-auto" onClick={() => onChange(waves.filter((_, x) => x !== i))}>
+                  remove
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {w.enemies.length === 0 && <span className="text-muted">empty</span>}
+                {w.enemies.map((e) => (
+                  <span key={e.id} className="px-1.5 py-0.5 rounded bg-hover flex items-center gap-1">
+                    {options.find((o) => o.id === e.id)?.name ?? e.id}
+                    <button className="text-muted hover:text-normal" onClick={() => bump(i, e.id, -1)}>−</button>
+                    <span className="tabular-nums">{e.count}</span>
+                    <button className="text-muted hover:text-normal" onClick={() => bump(i, e.id, 1)}>+</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          <button
+            className="text-accent hover:underline self-start"
+            onClick={() => onChange([...waves, { round: waves.length ? waves[waves.length - 1].round + 1 : 3, enemies: [], edge: "top" }])}
+          >
+            + wave
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ------------------------------------------------------------- adventuring day
 

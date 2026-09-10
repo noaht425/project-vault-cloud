@@ -11,7 +11,7 @@ import type { Size } from "../schema";
 import type { AwaitingInput, BattleDecision } from "./control";
 import { BattleGrid, BattleMapDef, blocksMove, footprint, gridFromDef, inBounds, makeGrid, terrainAt } from "./grid";
 import { runBattleLoop } from "./loop";
-import { BattleState, type BattleFrame, type Pos } from "./state";
+import { BattleState, type BattleFrame, type Pos, type Wave } from "./state";
 
 export type { BattleFrame, BattleGrid, BattleMapDef };
 export { makeGrid, gridFromDef };
@@ -30,6 +30,8 @@ export interface BattleSetup {
   seed?: number;
   maxRounds?: number;
   recordFrames?: boolean;
+  /** reinforcement waves — extra monsters arriving at a map edge on a given round */
+  waves?: Wave[];
   /** unit ids the player is driving (the rest stay AI) */
   controlled?: string[];
   /** recorded player choices, replayed on every run */
@@ -245,6 +247,8 @@ export function runBattle(s: BattleSetup): BattleOutcome {
     frameSeq: 0,
     controlled: s.controlled && s.controlled.length ? new Set(s.controlled) : undefined,
     decisions: s.decisions ?? [],
+    waves: s.waves && s.waves.length ? s.waves : undefined,
+    spawnedWaves: new Set(),
   };
 
   runBattleLoop(state);

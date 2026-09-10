@@ -212,6 +212,8 @@ export interface SimSetup {
   battleControl?: string[];
   /** adventuring-day mode: a sequence of encounters with rests between */
   day?: { encounters: EnemyEntry[][]; rests: RestKind[] };
+  /** Battle-mode reinforcement waves */
+  battleWaves?: { round: number; enemies: EnemyEntry[]; edge: "top" | "bottom" | "left" | "right" }[];
 }
 
 export type { DayResult, DayMonteCarlo, RestKind };
@@ -333,6 +335,9 @@ export function runBattleFromSetup(
   const seed = overrides.seed ?? setup.seed;
   const grid = overrides.grid ?? (setup.battleMap ? gridFromDef(setup.battleMap) : undefined);
   const placements = overrides.placements ?? setup.battleMap?.placements;
+  const waves = (setup.battleWaves ?? [])
+    .filter((w) => w.enemies.length && w.round >= 1)
+    .map((w) => ({ round: Math.round(w.round), enemies: enemyList(w.enemies), edge: w.edge }));
   const out = runBattle({
     party: setup.party,
     enemies,
@@ -340,6 +345,7 @@ export function runBattleFromSetup(
     grid,
     placements,
     seed,
+    waves: waves.length ? waves : undefined,
     controlled: setup.battleControl,
     decisions: overrides.decisions,
   });
