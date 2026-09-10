@@ -923,28 +923,20 @@ function Replay({
 
       <div className="flex gap-5 flex-wrap items-start">
         <div className="overflow-x-auto">
-          <div
-            className={`inline-grid font-mono leading-none select-none text-muted/40 ${awaiting || measuring ? "cursor-pointer" : ""}`}
-            style={{ gridTemplateColumns: `2.5ch 1ch repeat(${dims.width}, 1ch) 1ch`, fontSize: "13px" }}
-          >
-            {Array.from({ length: dims.height + 2 }, (_, ry) => {
-              const y = ry - 1; // -1 = top border, H = bottom border
-              if (y < 0 || y >= dims.height) {
-                const cornerL = y < 0 ? "┌" : "└";
-                const cornerR = y < 0 ? "┐" : "┘";
-                return (
-                  <div key={ry} className="contents">
-                    <span />
-                    <span className="text-center">{cornerL}</span>
-                    <span className="text-muted/40" style={{ gridColumn: `span ${dims.width}` }}>{"─".repeat(dims.width)}</span>
-                    <span className="text-center">{cornerR}</span>
-                  </div>
-                );
-              }
-              return (
-                <div key={ry} className="contents">
-                  <span className="text-right pr-1 tabular-nums" style={{ height: "1.15em" }}>{y + 1}</span>
-                  <span className="text-center">│</span>
+          <div className="flex font-mono leading-none select-none" style={{ fontSize: "13px" }}>
+            {/* row-number gutter */}
+            <div className="flex flex-col text-right pr-1 text-muted/50 tabular-nums shrink-0">
+              {Array.from({ length: dims.height }, (_, y) => (
+                <span key={y} style={{ height: "1.15em", width: "2.2ch" }}>{y + 1}</span>
+              ))}
+            </div>
+            {/* the map — square cells (track width == row height) inside a thin frame */}
+            <div
+              className={`grid text-muted/40 border border-border rounded-sm ${awaiting || measuring ? "cursor-pointer" : ""}`}
+              style={{ gridTemplateColumns: `repeat(${dims.width}, 1.15em)` }}
+            >
+              {Array.from({ length: dims.height }, (_, y) => (
+                <div key={y} className="contents">
                   {Array.from({ length: dims.width }, (_, x) => {
                     const key = `${x},${y}`;
                     const uRaw = unitAt.get(key);
@@ -1015,10 +1007,9 @@ function Replay({
                       </span>
                     );
                   })}
-                  <span className="text-center">│</span>
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
           <div className="mt-2">
             <TerrainLegend />
