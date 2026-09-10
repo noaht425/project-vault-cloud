@@ -10,6 +10,7 @@ import { isIncapacitated, livingEnemies, say, type CombatantState } from "../eng
 import {
   BattleState,
   boxOfUnit,
+  canFly,
   deriveZones,
   nearestEnemyFt,
   posOf,
@@ -150,7 +151,7 @@ function occupiedByOthers(state: BattleState, selfId: string): Set<string> {
 export function reposition(state: BattleState, u: CombatantState, plan: BattleIntentPlan): boolean {
   if (isIncapacitated(u) || !u.alive) return false;
   const budget = speedFt(u);
-  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
+  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id), flying: canFly(u) };
   const start = posOf(state, u.id);
   const myReach = unitReachFt(u);
   const target = plan.targetId ? state.units.get(plan.targetId) : undefined;

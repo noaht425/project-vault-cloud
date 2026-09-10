@@ -11,6 +11,8 @@ export interface MoveContext {
   size: Size;
   /** "x,y" keys of squares blocked by OTHER creatures (the mover's own squares excluded) */
   blocked: Set<string>;
+  /** the mover has a fly speed — difficult terrain and ground hazards don't slow it */
+  flying?: boolean;
 }
 
 /** can a creature of footprint `fp` stand with its anchor at (x,y)? */
@@ -29,6 +31,7 @@ export function canOccupy(ctx: MoveContext, x: number, y: number, fp: number): b
 
 /** worst (max) difficult-terrain multiplier under a footprint anchored at (x,y) */
 function stepTerrainExtra(ctx: MoveContext, x: number, y: number, fp: number): number {
+  if (ctx.flying) return 0; // a flyer clears rubble / undergrowth / shallow water
   let extra = 0;
   for (let dy = 0; dy < fp; dy++) {
     for (let dx = 0; dx < fp; dx++) {

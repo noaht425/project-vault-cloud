@@ -33,7 +33,7 @@ import { resolveEnemies } from "../engine/scenario";
 import { TERRAIN_GLYPH, blocksMove, footprint, inBounds, terrainAt } from "./grid";
 import { attackModsFor, geoTargetsFor, planTurn, reposition } from "./ai";
 import { applyDecision, computeAwaiting, runActionLogged } from "./control";
-import { BattleState, ReactionPause, deriveZones, nearestEnemyFt, recordFrame, unitReachFt } from "./state";
+import { BattleState, ReactionPause, canFly, deriveZones, nearestEnemyFt, recordFrame, unitReachFt } from "./state";
 
 const monsterGlyph = (i: number): string => (i < 9 ? String(i + 1) : String.fromCharCode(97 + (i - 9)));
 
@@ -152,7 +152,7 @@ function terrainString(state: BattleState): string {
 
 /** damage for standing in a hazard square at the start of your turn */
 function hazardTick(state: BattleState, u: CombatantState): void {
-  if (!u.alive || u.downed) return;
+  if (!u.alive || u.downed || canFly(u)) return; // a flyer hovers over ground hazards
   const p = state.pos.get(u.id);
   if (!p) return;
   const fp = footprint(u.ref.size);

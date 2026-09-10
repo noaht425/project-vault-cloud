@@ -13,6 +13,7 @@ import { footprint } from "./grid";
 import {
   BattleState,
   boxOfUnit,
+  canFly,
   deriveZones,
   posOf,
   recordFrame,
@@ -117,7 +118,7 @@ function occupiedByOthers(state: BattleState, selfId: string): Set<string> {
 /** what the UI needs to let the player run `u`'s turn */
 export function computeAwaiting(state: BattleState, u: CombatantState): AwaitingInput {
   const p = posOf(state, u.id);
-  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
+  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id), flying: canFly(u) };
   const flood = reachable(ctx, p.x, p.y, speedFt(u));
   const fp = footprint(u.ref.size);
   const reachableCells = [`${p.x},${p.y}`];
@@ -206,7 +207,7 @@ function aoeHits(
  *  the AI instead (an `auto` decision). */
 export function applyDecision(state: BattleState, u: CombatantState, d: BattleDecision): boolean {
   if (d.auto) return false;
-  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id) };
+  const ctx: MoveContext = { grid: state.grid, size: u.ref.size, blocked: occupiedByOthers(state, u.id), flying: canFly(u) };
   const start = posOf(state, u.id);
 
   // --- move ---

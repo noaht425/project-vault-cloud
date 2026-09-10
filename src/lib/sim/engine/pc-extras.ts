@@ -9,6 +9,7 @@
 //   ARE applied.
 
 import type { Ability, AutomationNode, Combatant, DamageType } from "../schema";
+import { SPELLS_BY_ID } from "../spells/catalog";
 
 const mod = (score: number): number => Math.floor((score - 10) / 2);
 const pbForLevel = (lvl: number): number => 2 + Math.floor((Math.max(1, Math.min(20, lvl)) - 1) / 4);
@@ -106,13 +107,20 @@ const RACE_PATTERNS: [RegExp, string][] = [
   [/dragonborn|draconblood|ravenite/i, "dragonborn"],
   [/half[-\s]?orc/i, "half-orc"],
   [/\borc\b/i, "orc"],
+  [/fairy/i, "fairy"],
+  [/air\s*genasi/i, "genasi-air"],
+  [/earth\s*genasi/i, "genasi-earth"],
+  [/fire\s*genasi/i, "genasi-fire"],
+  [/water\s*genasi/i, "genasi-water"],
+  [/genasi/i, "genasi"],
+  [/\bdrow\b/i, "drow"],
   [/halfling|lightfoot|stout|ghostwise/i, "halfling"],
   [/tiefling|infernal|abyssal legacy/i, "tiefling"],
   [/aasimar/i, "aasimar"],
   [/dwarf|dwarven|duergar/i, "dwarf"],
   [/goliath/i, "goliath"],
   [/\bgnome\b|rock gnome|deep gnome|svirfneblin/i, "gnome"],
-  [/\belf\b|eladrin|\bdrow\b|half[-\s]?elf/i, "elf"],
+  [/\belf\b|eladrin|half[-\s]?elf/i, "elf"],
   [/human|variant human/i, "human"],
 ];
 
@@ -168,6 +176,86 @@ function dragonbornBreath(c: Combatant, level: number, ancestry: string): Combat
   };
 }
 
+/** Add a racial spell as a limited-use (default 1/long rest) action or reaction,
+ *  built from the SRD catalog. Returns null when the character is too low level
+ *  or the spell has no combat model. */
+function racialSpell(
+  c: Combatant,
+  spellId: string,
+  level: number,
+  o: { minLevel?: number; ability?: Ability; resource: string; uses?: number; slotLevel?: number; opener?: boolean },
+): { c: Combatant; note: string | null } {
+  if (level < (o.minLevel ?? 1)) return { c, note: null };
+  const sp = SPELLS_BY_ID[spellId];
+  if (!sp) return { c, note: `${spellId} — no catalog entry` };
+  const ability = o.ability ?? "cha";
+  const spellMod = mod(c.abilities[ability]);
+  const pb = pbForLevel(level);
+  const dc = 8 + pb + spellMod;
+  const slotLevel = o.slotLevel ?? sp.level;
+  const uses = o.uses ?? 1;
+  const id = `racial-${spellId}`;
+
+  let automation: AutomationNode[];
+  if (sp.id === "hellish-rebuke") {
+    // Infernal Legacy: always cast as a 2nd-level spell (3d10)
+    const dice = `${2 + Math.max(0, slotLevel - 1)}d10`;
+    automation = [{ type: "target", who: { who: "aiChoice" }, effects: [
+      { type: "save", ability: "dex", dc,
+        onFail: [{ type: "damage", amount: dice, damageType: "fire" }],
+        onSuccess: [{ type: "damage", amount: dice, damageType: "fire", half: true }] },
+    ] }];
+  } else if (sp.build) {
+    automation = sp.build({ slotLevel, casterLevel: level, spellMod, dc, toHit: pb + spellMod, pb });
+  } else {
+    return { c, note: `${sp.name} (racial) — utility / not modelled` };
+  }
+
+  const isReaction = sp.castTime === "reaction";
+  const action = {
+    id, name: sp.name,
+    cost: sp.castTime === "bonus" ? { bonus: 1 } : isReaction ? { reaction: 1 } : { action: 1 },
+    recharge: "none" as const,
+    limitedUse: { resource: o.resource, amount: 1 },
+    ...(sp.concentration ? { concentration: true } : {}),
+    ...(isReaction ? { trigger: sp.id === "hellish-rebuke" ? "self.tookDamageFromAttackOrSpell" : "self.wasHitByAttack" } : {}),
+    isSpell: true,
+    automation,
+  };
+  const out: Combatant = {
+    ...c,
+    resources: { ...c.resources, [o.resource]: { max: uses, recharge: "longRest" } },
+    actions: isReaction ? c.actions : [...c.actions, action],
+    reactions: isReaction ? [...c.reactions, action] : c.reactions,
+  };
+  if (!isReaction && o.opener) out.ai = { ...out.ai, opener: [...out.ai.opener, id] };
+  return { c: out, note: `${sp.name} (racial, ${uses}/long rest${o.minLevel && o.minLevel > 1 ? `, from L${o.minLevel}` : ""})` };
+}
+
+/** Add a racial at-will cantrip built from the catalog. */
+function racialCantrip(c: Combatant, spellId: string, level: number, ability: Ability = "cha"): { c: Combatant; note: string | null } {
+  const sp = SPELLS_BY_ID[spellId];
+  if (!sp?.build) return { c, note: `${spellId} (racial cantrip) — not modelled` };
+  const spellMod = mod(c.abilities[ability]);
+  const pb = pbForLevel(level);
+  const automation = sp.build({ slotLevel: 0, casterLevel: level, spellMod, dc: 8 + pb + spellMod, toHit: pb + spellMod, pb });
+  return {
+    c: { ...c, actions: [...c.actions, { id: `racial-${spellId}`, name: sp.name, cost: { action: 1 }, recharge: "none", isSpell: true, automation }] },
+    note: `${sp.name} (racial cantrip)`,
+  };
+}
+
+/** highest of Int / Wis / Cha — the "spellcasting ability of your choice" races use this */
+function bestMental(ab: Combatant["abilities"]): Ability {
+  return (["int", "wis", "cha"] as const).reduce((best, k) => (ab[k] > ab[best] ? k : best), "cha" as Ability);
+}
+
+/** give a PC a flying speed equal to its walk speed (Fairy, Winged Tiefling, …) */
+function withFlight(c: Combatant): Combatant {
+  const walk = c.speeds?.walk ?? 30;
+  return { ...c, speeds: { ...c.speeds, walk, fly: Math.max(walk, c.speeds?.fly ?? 0) } };
+}
+
 /** Apply racial traits that touch the fight. `raw` is the note's race string. */
 export function applyRace(c: Combatant, raw: string, level: number): { c: Combatant; notes: string[] } {
   const key = raceKey(raw || "");
@@ -185,23 +273,74 @@ export function applyRace(c: Combatant, raw: string, level: number): { c: Combat
       notes.push("Relentless Endurance: drops to 1 HP instead of 0, once per fight");
       notes.push("Savage Attacks (extra weapon die on a crit) is not modeled");
       break;
-    case "tiefling":
+    case "tiefling": {
       out = withResist(out, "fire");
       notes.push("Hellish Resistance: fire resistance");
+      const hr = racialSpell(out, "hellish-rebuke", level, { minLevel: 3, ability: "cha", resource: "infernal_legacy", slotLevel: 2 });
+      out = hr.c;
+      if (hr.note) notes.push("Infernal Legacy: " + hr.note);
+      if (level >= 5) notes.push("Infernal Legacy Darkness (L5) is not modeled");
       break;
+    }
     case "aasimar":
       out = withResist(withResist(out, "necrotic"), "radiant");
       notes.push("Celestial Resistance: necrotic + radiant resistance");
+      notes.push("Radiant Soul / Consumption / Necrotic Shroud transformations are not modeled");
       break;
     case "dwarf":
       out = withResist(out, "poison");
       notes.push("Dwarven Resilience: poison resistance");
       break;
+    case "fairy": {
+      out = withFlight(out);
+      notes.push("Flight: fly speed = walk speed (assumes light or no armour — a Fairy can't fly in medium/heavy)");
+      const ff = racialSpell(out, "faerie-fire", level, { minLevel: 3, ability: bestMental(out.abilities), resource: "fairy_magic" });
+      out = ff.c;
+      if (ff.note) notes.push("Fairy Magic: " + ff.note);
+      if (level >= 5) notes.push("Fairy Magic Enlarge/Reduce (L5) has no fight effect in the sim");
+      break;
+    }
+    case "genasi-fire": {
+      out = withResist(out, "fire");
+      notes.push("Fire Genasi: fire resistance");
+      const pf = racialCantrip(out, "produce-flame", level, "con");
+      out = pf.c;
+      if (pf.note) notes.push("Reach to the Blaze: " + pf.note);
+      const bh = racialSpell(out, "burning-hands", level, { minLevel: 3, ability: "con", resource: "reach_to_the_blaze", opener: true });
+      out = bh.c;
+      if (bh.note) notes.push("Reach to the Blaze: " + bh.note);
+      break;
+    }
+    case "genasi-water":
+      out = withResist(out, "acid");
+      notes.push("Water Genasi: acid resistance + swim speed (Shape Water / Create-Destroy Water are utility)");
+      break;
+    case "genasi-air":
+      out = withResist(out, "lightning");
+      notes.push("Air Genasi: lightning resistance (Unending Breath / Levitate are utility)");
+      break;
+    case "genasi-earth":
+      notes.push("Earth Genasi: Earth Walk (ignore earthen difficult terrain) + Pass Without Trace are not modeled");
+      break;
+    case "genasi":
+      notes.push('Genasi — specify a subrace ("Air / Earth / Fire / Water Genasi") for its resistance and spells');
+      break;
+    case "drow": {
+      const ff = racialSpell(out, "faerie-fire", level, { minLevel: 3, ability: "cha", resource: "drow_magic" });
+      out = ff.c;
+      if (ff.note) notes.push("Drow Magic: " + ff.note);
+      if (level >= 5) notes.push("Drow Magic Darkness (L5) is not modeled");
+      notes.push("Sunlight Sensitivity (disadvantage in direct sunlight) is not modeled");
+      break;
+    }
     case "halfling":
       notes.push("Halfling Lucky / Brave: reroll-1s and fear advantage are not modeled");
       break;
     case "goliath":
-      notes.push("Stone's Endurance (1/short-rest damage soak) is not modeled");
+      notes.push("Stone's Endurance (1/rest damage soak) is not modeled");
+      break;
+    case "gnome":
+      notes.push("Gnome Cunning (advantage on Int/Wis/Cha saves vs magic) is not modeled");
       break;
     case "elf":
       notes.push("Fey Ancestry (charm advantage, no sleep) is not modeled");
@@ -652,13 +791,19 @@ export const RACE_OPTIONS: string[] = [
   "Dragonborn (Green)",
   "Dragonborn (Black)",
   "Half-Orc",
-  "Halfling",
+  "Fairy",
+  "Fire Genasi",
+  "Water Genasi",
+  "Air Genasi",
+  "Earth Genasi",
   "Tiefling",
+  "Drow",
   "Aasimar",
   "Dwarf",
   "Elf",
   "Gnome",
   "Goliath",
+  "Halfling",
   "Human",
 ];
 

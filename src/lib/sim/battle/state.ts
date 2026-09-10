@@ -136,7 +136,13 @@ export function unitReachFt(u: CombatantState): number {
 }
 
 /** walk speed in feet (default 30) */
-export const speedFt = (u: CombatantState): number => u.ref.speeds?.walk ?? 30;
+/** movement budget: the walk speed, or the fly speed for a creature that can
+ *  ONLY fly (no walk). A flyer whose fly == walk (a Fairy) is unchanged. */
+export const speedFt = (u: CombatantState): number =>
+  u.ref.speeds?.walk ?? u.ref.speeds?.fly ?? 30;
+
+/** does this unit have a flying speed? (it ignores difficult terrain + ground hazards) */
+export const canFly = (u: CombatantState): boolean => (u.ref.speeds?.fly ?? 0) > 0;
 
 /** min edge-to-edge feet from `u` to any living enemy */
 export function nearestEnemyFt(state: BattleState, u: CombatantState): number {

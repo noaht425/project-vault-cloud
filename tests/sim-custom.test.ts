@@ -754,3 +754,62 @@ describe("per-PC spell picker", () => {
     expect(b.actions.map((x) => x.id)).toEqual(a.actions.map((x) => x.id));
   });
 });
+
+describe("more races + flight", () => {
+  it("Fairy: fly speed + Faerie Fire from level 3", async () => {
+    const { applyRace } = await import("../src/lib/sim/engine/pc-extras");
+    const { makeTemplate } = await import("../src/lib/sim/engine/templates");
+    const lo = applyRace(makeTemplate("blaster-wizard", 2), "Fairy", 2);
+    expect(lo.c.speeds?.fly).toBe(lo.c.speeds?.walk);
+    expect(lo.c.actions.some((a) => a.id === "racial-faerie-fire")).toBe(false);
+    const hi = applyRace(makeTemplate("blaster-wizard", 8), "Fairy", 8);
+    expect(hi.c.actions.some((a) => a.id === "racial-faerie-fire")).toBe(true);
+  });
+
+  it("Genasi: subrace resistances + Fire Genasi's Produce Flame / Burning Hands", async () => {
+    const { applyRace } = await import("../src/lib/sim/engine/pc-extras");
+    const { makeTemplate } = await import("../src/lib/sim/engine/templates");
+    const t = () => makeTemplate("gwm-fighter", 6);
+    expect(applyRace(t(), "Fire Genasi", 6).c.resistances).toContain("fire");
+    expect(applyRace(t(), "Water Genasi", 6).c.resistances).toContain("acid");
+    expect(applyRace(t(), "Air Genasi", 6).c.resistances).toContain("lightning");
+    const fire = applyRace(t(), "Fire Genasi", 6).c;
+    expect(fire.actions.map((a) => a.id)).toEqual(expect.arrayContaining(["racial-produce-flame", "racial-burning-hands"]));
+  });
+
+  it("Tiefling gets Hellish Rebuke as a racial reaction from level 3", async () => {
+    const { applyRace } = await import("../src/lib/sim/engine/pc-extras");
+    const { makeTemplate } = await import("../src/lib/sim/engine/templates");
+    const r = applyRace(makeTemplate("gwm-fighter", 5), "Tiefling", 5).c;
+    const hr = r.reactions.find((x) => x.id === "racial-hellish-rebuke");
+    expect(hr).toBeDefined();
+    expect(JSON.stringify(hr!.automation)).toMatch(/"damageType":"fire"/);
+  });
+
+  it("a flyer ignores difficult terrain in Battle mode", async () => {
+    const { runBattle } = await import("../src/lib/sim/battle");
+    const { gridFromDef } = await import("../src/lib/sim/battle/grid");
+    // a 20-wide corridor of difficult terrain between the sides
+    const w = 20, h = 6;
+    let tiles = "";
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles += x > 3 && x < 16 ? "~" : ".";
+    const grid = gridFromDef({ width: w, height: h, tiles, placements: {} });
+    const run = (race?: string) =>
+      runBattle({
+        party: [{ template: "gwm-fighter", name: "F", level: 5, race }],
+        enemies: ["owlbear"],
+        seed: 3,
+        grid,
+        placements: { "pc-1-gwm-fighter": { x: 1, y: 2 } },
+      });
+    const posAfterR1 = (race?: string) => {
+      const out = run(race);
+      const mv = out.frames.filter((f) => f.kind === "move" && f.actorId === "pc-1-gwm-fighter");
+      const last = mv.at(0);
+      const u = last?.units.find((x) => x.id === "pc-1-gwm-fighter");
+      return u ? u.x : 1;
+    };
+    // the fairy fighter (fly speed) covers more ground through the ~ than a walker
+    expect(posAfterR1("Fairy")).toBeGreaterThan(posAfterR1(undefined));
+  });
+});
