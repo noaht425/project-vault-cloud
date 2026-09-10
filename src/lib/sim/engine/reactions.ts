@@ -9,9 +9,12 @@
 // concussed / stunned / a "no reactions" rider now actually shuts a creature's
 // reactions off. Reactions never trigger reactions (`state.inReaction`).
 
-import type { Action, AutomationNode } from "../schema";
+import type { Action, AutomationNode, DamageType } from "../schema";
 import { runAction, runAutomation } from "./interpreter";
 import { CombatantState, CombatState, canTakeReactions, isIncapacitated, say, type ReactionAsk } from "./state";
+
+/** the five damage types Absorb Elements answers */
+const ELEMENTAL: readonly DamageType[] = ["acid", "cold", "fire", "lightning", "thunder"];
 
 /**
  * At a reaction decision point, hand off to the Battle-mode seam if one is
@@ -38,8 +41,9 @@ type RKind =
   | "retaliateOnHit" // riposte — hit back when hit
   | "retaliateOnMiss"// riposte — hit back when a melee attack misses
   | "counterspell"   // negate an enemy spell
+  | "absorbElements" // Absorb Elements — resist the triggering element until your next turn
   | "onBloodied"     // recharge + re-use a breath the first time it is bloodied
-  | "onDamaged"      // punish the source of any attack/spell damage
+  | "onDamaged"      // punish the source of any attack/spell damage (also Hellish Rebuke)
   | "onBigHit"       // react to 30+ damage from one source
   | "onDrop"         // react to a creature hitting 0 hp
   | "unknown";
@@ -51,6 +55,8 @@ function classify(r: Action): RKind {
   if (id.includes("weight-of-ages") || id.includes("weightofages")) return "negateHit";
   if (id.includes("uncanny")) return "halveDamage";
   if (id.includes("counterspell")) return "counterspell";
+  if (id.includes("absorb-elements") || id.includes("absorbelements") || tr.includes("tookelementaldamage")) return "absorbElements";
+  if (id.includes("hellish-rebuke") || id.includes("hellishrebuke")) return "onDamaged";
   if (id.includes("riposte")) return tr.includes("missed") ? "retaliateOnMiss" : "retaliateOnHit";
   if (tr.includes("belowhalf") || tr.includes("reducedtohalf")) return "onBloodied";
   if (tr.includes("tookdamagefromattackorspell")) return "onDamaged";
@@ -158,6 +164,38 @@ export function reduceIncomingDamage(
   return amount;
 }
 
+/**
+ * Absorb Elements — a reaction to taking acid/cold/fire/lightning/thunder damage.
+ * Sets `target.absorbElements` so `applyDamage`'s resistance block halves the
+ * triggering instance *and* any further hits of that type until the reactor's
+ * next turn. The "first melee hit next turn deals +1d6" rider is not modelled.
+ */
+export function reactToElementalDamage(
+  state: CombatState,
+  target: CombatantState,
+  amount: number,
+  type: DamageType,
+): void {
+  if (state.inReaction || !target.alive || target.downed) return;
+  if (!ELEMENTAL.includes(type) || target.absorbElements?.type === type) return;
+  for (const r of target.ref.reactions) {
+    if (classify(r) !== "absorbElements" || !ready(state, target, r)) continue;
+    const ok = decideReaction(
+      state,
+      target,
+      "absorbElements",
+      `${target.name} is taking ${amount} ${type} damage — Absorb Elements halves it and resists ${type} until your next turn.`,
+      "Absorb Elements",
+      "Take it full",
+    );
+    if (!ok) return;
+    consume(target, r);
+    target.absorbElements = { type, untilRound: state.round + 1 };
+    say(state, `${target.name} casts Absorb Elements (resist ${type})`, target.id);
+    return;
+  }
+}
+
 // --------------------------------------------------------- attack hit or missed
 
 /** Riposte — hit back when hit, or when a melee attack misses. */
@@ -195,7 +233,14 @@ export function reactToAttackResolved(
  */
 export function reactToDamageTaken(
   state: CombatState,
-  p: { target: CombatantState; amount: number; crossedHalf: boolean; viaAttackOrSpell: boolean },
+  p: {
+    target: CombatantState;
+    amount: number;
+    crossedHalf: boolean;
+    viaAttackOrSpell: boolean;
+    /** the damage came from some other creature (attack, spell, breath, aura, …) */
+    fromCreature?: boolean;
+  },
 ): void {
   const t = p.target;
   if (state.inReaction || !t.alive || t.downed) return;
@@ -208,7 +253,20 @@ export function reactToDamageTaken(
       fire(state, t, r);
       return;
     }
-    if (k === "onDamaged" && p.viaAttackOrSpell) {
+    const rebukeR = r.id.toLowerCase().includes("hellish");
+    if (k === "onDamaged" && (p.viaAttackOrSpell || (rebukeR && p.fromCreature))) {
+      const rebuke = rebukeR;
+      const ok = decideReaction(
+        state,
+        t,
+        "retaliate",
+        rebuke
+          ? `${t.name} was hit for ${p.amount} — Hellish Rebuke answers the attacker with 2d10 fire (Dex save for half).`
+          : `${t.name} was hit for ${p.amount} — ${r.name} strikes back at the attacker.`,
+        rebuke ? "Hellish Rebuke" : r.name,
+        "Hold reaction",
+      );
+      if (!ok) continue;
       fire(state, t, r);
       return;
     }

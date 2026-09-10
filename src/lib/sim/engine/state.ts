@@ -1,7 +1,7 @@
 // Live combat state. The immutable stat block lives on `.ref`; everything that
 // changes during a fight lives here.
 
-import type { Combatant, Condition, EffectMods } from "../schema";
+import type { Combatant, Condition, DamageType, EffectMods } from "../schema";
 import type { Rng } from "./rng";
 
 export interface ActiveEffect {
@@ -53,6 +53,8 @@ export interface CombatantState {
   d20SwapsLeft?: number;   // d20Replacement — uses left this round
   meleeHitSinceMyTurn?: boolean; // a melee PC has connected -> a keep-distance monster will withdraw (provoking)
   assassinateUntilRound?: number; // Ambush: while state.round <= this, hits have advantage and auto-crit
+  /** Absorb Elements — resistance to one damage type until the start of the reactor's next turn */
+  absorbElements?: { type: DamageType; untilRound: number };
 
   zone: "melee" | "ranged";
   alive: boolean;
@@ -123,7 +125,7 @@ export interface CombatState {
 /** the question `state.askReaction` is handed at a reaction decision point */
 export interface ReactionAsk {
   unitId: string;
-  kind: "shield" | "counterspell" | "riposte" | "uncannyDodge";
+  kind: "shield" | "counterspell" | "riposte" | "uncannyDodge" | "absorbElements" | "retaliate";
   /** one human sentence describing the trigger and what the reaction would do */
   prompt: string;
   /** button label for spending the reaction / for declining it */

@@ -202,6 +202,9 @@ export function runCombat(monsters: Combatant[], opts: RunOptions = {}): CombatS
 // ---------------------------------------------------------------- turn phases
 
 export function startOfTurn(state: CombatState, u: CombatantState): void {
+  // Absorb Elements resistance lasts "until the start of your next turn"
+  if (u.absorbElements && state.round >= u.absorbElements.untilRound) u.absorbElements = undefined;
+
   // effect ticks (DoT: Burning, charm-song, molten ground, ...)
   for (const e of [...u.effects]) {
     if (e.tick && e.tick.length) {

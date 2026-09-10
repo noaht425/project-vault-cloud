@@ -127,3 +127,76 @@ describe("battle reactions — surfaced to the player", () => {
     expect(run.done).toBe(true);
   });
 });
+
+// --------------------------------------------------- Absorb Elements / Hellish Rebuke
+
+const casters = () => [
+  { template: "blaster-wizard", name: "Cy", level: 9 },
+  { template: "warlock", name: "Wa", level: 9 },
+];
+
+/** drive an all-auto fight, answering every reaction prompt with `take` */
+function playCasters(seed: number, controlled: string, take: boolean) {
+  const setup = { party: casters(), enemies: ["adult-red-dragon"] as string[], seed, controlled: [controlled] };
+  const decisions: BattleDecision[] = [];
+  const reactionChoices: ReactionChoice[] = [];
+  const kinds: string[] = [];
+  let run = runBattle({ ...setup, decisions, reactionChoices });
+  let guard = 300;
+  while (!run.done && guard-- > 0) {
+    if (run.awaitingReaction) {
+      kinds.push(run.awaitingReaction.kind);
+      const r = run.awaitingReaction;
+      reactionChoices.push({ round: r.round, unitId: r.unitId, seq: r.seq, take });
+    } else if (run.awaiting) {
+      decisions.push({ round: run.awaiting.round, unitId: run.awaiting.unitId, auto: true });
+    } else break;
+    run = runBattle({ ...setup, decisions, reactionChoices });
+  }
+  const log = run.frames.map((f) => f.text ?? "").join("\n");
+  return { run, kinds, log };
+}
+
+describe("battle reactions — Absorb Elements & Hellish Rebuke", () => {
+  it("a full caster carries Absorb Elements; a warlock carries Hellish Rebuke", async () => {
+    const { CASTER_BUILDERS } = await import("../src/lib/sim/spells/casterTemplates");
+    const wiz = CASTER_BUILDERS["blaster-wizard"](9);
+    const lock = CASTER_BUILDERS["warlock"](9);
+    expect(wiz.reactions.map((r) => r.id)).toContain("absorb-elements");
+    expect(lock.reactions.map((r) => r.id)).toContain("hellish-rebuke");
+    const hr = lock.reactions.find((r) => r.id === "hellish-rebuke")!;
+    expect(JSON.stringify(hr.automation)).toMatch(/"damageType":"fire"/);
+    expect(JSON.stringify(hr.automation)).toMatch(/"half":true/);
+  });
+
+  it("pauses on a controlled wizard's Absorb Elements when the dragon breathes fire", () => {
+    const { kinds, log } = playCasters(2, "pc-1-blaster-wizard", true);
+    expect(kinds).toContain("absorbElements");
+    expect(log).toMatch(/Absorb Elements/);
+  });
+
+  it("Absorb Elements halves the triggering elemental hit", () => {
+    const took = playCasters(2, "pc-1-blaster-wizard", true);
+    const declined = playCasters(2, "pc-1-blaster-wizard", false);
+    const cyHp = (r: typeof took) => {
+      // Cy's HP right after round 1 (the breath) — first frame at round >= 2
+      const f = r.run.frames.find((x) => x.round >= 2) ?? r.run.frames.at(-1)!;
+      return f.units.find((u) => u.name === "Cy")?.hp ?? 0;
+    };
+    // absorbing leaves Cy with strictly more HP than eating the breath full
+    expect(cyHp(took)).toBeGreaterThan(cyHp(declined));
+  });
+
+  it("surfaces a controlled warlock's Hellish Rebuke and it burns the attacker", () => {
+    const { kinds, log } = playCasters(1, "pc-2-warlock", true);
+    expect(kinds).toContain("retaliate");
+    expect(log).toMatch(/Hellish Rebuke/);
+  });
+
+  it("replays with the new kinds are deterministic", () => {
+    const a = playCasters(2, "pc-1-blaster-wizard", true);
+    const b = playCasters(2, "pc-1-blaster-wizard", true);
+    expect(a.kinds).toEqual(b.kinds);
+    expect(JSON.stringify(a.run.frames.at(-1))).toBe(JSON.stringify(b.run.frames.at(-1)));
+  });
+});

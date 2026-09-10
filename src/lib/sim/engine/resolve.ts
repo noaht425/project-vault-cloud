@@ -15,6 +15,7 @@ import {
 import {
   reactToDamageTaken,
   reactToDrop,
+  reactToElementalDamage,
   reactToIncomingAttack,
   reduceIncomingDamage,
 } from "./reactions";
@@ -301,6 +302,9 @@ export function applyDamage(
 
   // Uncanny Dodge — the target spends a reaction to halve an attack's damage
   rawAmount = reduceIncomingDamage(state, target, rawAmount, opts.viaAttack ?? false);
+  // Absorb Elements — a reaction to elemental damage; sets a temp resistance the
+  // block below honours (so the triggering hit is halved too)
+  reactToElementalDamage(state, target, rawAmount, type);
 
   const hpBefore = target.hp;
   let dmg = rawAmount;
@@ -322,8 +326,11 @@ export function applyDamage(
     if (flat && flat.rule === "flatDamageReduction") dmg = Math.max(0, dmg - flat.amount);
 
     // resistance is applied at most once even from multiple sources
+    const absorbed =
+      target.absorbElements?.type === type && state.round < target.absorbElements.untilRound;
     const resisted =
       ref.resistances.includes(type) ||
+      absorbed ||
       (bps && !opts.attackerMagical && ref.resistancesNonmagical.includes(type)) ||
       (bps && !opts.hadAdvantage && ref.specialRules.some((r) => r.rule === "resistNonAdvantageAttacks"));
     if (resisted) dmg = Math.floor(dmg * 0.5);
@@ -391,6 +398,7 @@ export function applyDamage(
     reactToDamageTaken(state, {
       target, amount: dmg, crossedHalf,
       viaAttackOrSpell: !!(opts.viaAttack || opts.viaSpell),
+      fromCreature: !!opts.sourceId && opts.sourceId !== target.id,
     });
   }
   return dmg;

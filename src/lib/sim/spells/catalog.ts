@@ -111,6 +111,8 @@ export const SPELLS: Spell[] = [
   S_("ray-of-sickness", "Ray of Sickness", 1, "necromancy", [S, W], { role: "damage", max: 9, build: (c) => { const d = 2 + Math.max(0, c.slotLevel - 1); return [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: c.toHit, onHit: [{ type: "damage", amount: `${d}d8`, damageType: "poison" }, { type: "save", ability: "con", dc: c.dc, onFail: [{ type: "applyCondition", condition: "poisoned", durationRounds: 1 }] }] }] }]; } }),
   S_("sanctuary", "Sanctuary", 1, "abjuration", [C, A], { ct: "bonus", role: "defense", build: effect("sanctuary", { attacksAgainstItAdvantage: "dis" }, { who: "self", durationRounds: 3 }) }),
   S_("shield", "Shield", 1, "abjuration", [S, W], { ct: "reaction", role: "defense" }),
+  S_("absorb-elements", "Absorb Elements", 1, "abjuration", [S, W, D, R, A], { ct: "reaction", role: "defense" }),
+  S_("hellish-rebuke", "Hellish Rebuke", 1, "evocation", [K], { ct: "reaction", role: "damage", max: 9 }),
   S_("shield-of-faith", "Shield of Faith", 1, "abjuration", [C, P], { conc: true, ct: "bonus", role: "buff", build: effect("shield-of-faith", { acBonus: 2 }, { who: "self" }) }),
   S_("silent-image", "Silent Image", 1, "illusion", [B, S, W], { conc: true }),
   S_("sleep", "Sleep", 1, "enchantment", [B, S, W], { role: "control", max: 9, build: saveCond("wis", "unconscious", 2, { who: { who: "chosenEnemies", upTo: 2 } }) }),

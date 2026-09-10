@@ -20,7 +20,7 @@ function baseCtx(cc: CasterCtx): Omit<CastCtx, "slotLevel"> {
 const costFor = (sp: Spell): Action["cost"] =>
   sp.castTime === "bonus" ? { bonus: 1 } : sp.castTime === "reaction" ? { reaction: 1 } : { action: 1 };
 
-/** A reaction spell (Shield, Counterspell, Absorb Elements) -> a reaction Action. */
+/** A reaction spell (Shield, Counterspell, Absorb Elements, Hellish Rebuke) -> a reaction Action. */
 export function spellReaction(sp: Spell, cc: CasterCtx): Action | undefined {
   if (sp.castTime !== "reaction") return undefined;
   const wantLevel = sp.id === "counterspell" ? 3 : sp.level;
@@ -30,6 +30,36 @@ export function spellReaction(sp: Spell, cc: CasterCtx): Action | undefined {
     ? "pactSlot"
     : maxSlotLevel(cc.kind, cc.level) >= wantLevel ? `slot${wantLevel}` : undefined;
   if (!resource) return undefined;
+
+  // Hellish Rebuke — Dex save vs your spell DC for half of 2d10 (+1d10 per slot
+  // above 1st) fire, aimed at the attacker (approximated as the AI's best target)
+  if (sp.id === "hellish-rebuke") {
+    const slot = cc.kind === "warlock" ? maxSlotLevel("warlock", cc.level) : wantLevel;
+    const dice = 2 + Math.max(0, slot - 1);
+    const dc = 8 + cc.pb + cc.spellMod;
+    return {
+      id: "hellish-rebuke", name: sp.name, cost: { reaction: 1 }, recharge: "none",
+      trigger: "self.tookDamageFromAttackOrSpell", isSpell: true,
+      limitedUse: { resource, amount: 1 },
+      automation: [{ type: "target", who: { who: "aiChoice" }, effects: [
+        { type: "save", ability: "dex", dc,
+          onFail: [{ type: "damage", amount: `${dice}d10`, damageType: "fire" }],
+          onSuccess: [{ type: "damage", amount: `${dice}d10`, damageType: "fire", half: true }] },
+      ] }],
+    };
+  }
+
+  // Absorb Elements — the engine hook (reactToElementalDamage) reads the id +
+  // trigger; the note keeps the action list tidy
+  if (sp.id === "absorb-elements") {
+    return {
+      id: "absorb-elements", name: sp.name, cost: { reaction: 1 }, recharge: "none",
+      trigger: "self.tookElementalDamage", isSpell: true,
+      limitedUse: { resource, amount: 1 },
+      automation: [{ type: "note", text: "resist the triggering element until your next turn (engine hook)" }],
+    };
+  }
+
   const trigger = sp.id === "counterspell" ? "enemy.castsSpell" : "self.wasHitByAttack";
   return {
     id: sp.id === "shield" ? "shield" : sp.id === "counterspell" ? "counterspell" : `react-${sp.id}`,
