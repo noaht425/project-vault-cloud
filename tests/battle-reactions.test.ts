@@ -82,10 +82,35 @@ describe("battle reactions — surfaced to the player", () => {
   });
 
   it("surfaces a controlled fighter's Riposte", () => {
-    const out = playOut(5, "pc-2-gwm-fighter", true);
-    expect(out.run.done).toBe(true);
-    expect(out.prompts.some((p) => p.kind === "riposte")).toBe(true);
-    expect(out.prompts.every((p) => p.unitName === "Bront")).toBe(true);
+    // Riposte fires when a MELEE attack misses the fighter — a pair of owlbears
+    // (many +7 swings vs the fighter's AC 19) makes that happen reliably
+    const setup = {
+      party: [
+        { template: "assassin-rogue", name: "Sly", level: 5 },
+        { template: "gwm-fighter", name: "Bront", level: 5 },
+      ],
+      enemies: ["owlbear x2"] as string[],
+      seed: 2,
+      controlled: ["pc-2-gwm-fighter"],
+    };
+    const decisions: BattleDecision[] = [];
+    const reactionChoices: ReactionChoice[] = [];
+    const kinds: string[] = [];
+    let run = runBattle({ ...setup, decisions, reactionChoices });
+    let guard = 300;
+    while (!run.done && guard-- > 0) {
+      if (run.awaitingReaction) {
+        const r = run.awaitingReaction;
+        kinds.push(r.kind);
+        expect(r.unitName).toBe("Bront");
+        reactionChoices.push({ round: r.round, unitId: r.unitId, seq: r.seq, take: true });
+      } else if (run.awaiting) {
+        decisions.push({ round: run.awaiting.round, unitId: run.awaiting.unitId, auto: true });
+      } else break;
+      run = runBattle({ ...setup, decisions, reactionChoices });
+    }
+    expect(run.done).toBe(true);
+    expect(kinds).toContain("riposte");
   });
 
   it("replays are deterministic — same answers, same final frame", () => {

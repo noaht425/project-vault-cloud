@@ -46,12 +46,16 @@ function pc(base: {
 
 function gwmFighter(level: number): Combatant {
   const pb = pbFor(level);
-  // 3 attacks at 11, plus a GWM bonus-action attack — model as an extra swing
-  const attacks = (level >= 20 ? 4 : level >= 11 ? 3 : level >= 5 ? 2 : 1) + (level >= 5 ? 1 : 0);
+  // Extra Attack: 1 swing, 2 at L5, 3 at L11, 4 at L20
+  const baseAttacks = level >= 20 ? 4 : level >= 11 ? 3 : level >= 5 ? 2 : 1;
+  // ...plus a GWM bonus-action attack once Extra Attack is online — folded into the main routine
+  const attacks = baseAttacks + (level >= 5 ? 1 : 0);
   const str = pb === 6 ? 5 : 4;
   // Great Weapon Master: -5 to hit for +10 damage, roughly offset by a magic weapon
   const toHit = pb + str - 2;
   const dmgPerHit = `2d6+${str + 6}`; // 2d6 + STR + GWF + partial GWM
+  const swing = () =>
+    ({ type: "attack" as const, bonus: toHit, onHit: [{ type: "damage" as const, amount: dmgPerHit, damageType: "slashing" as const }] });
   return pc({
     id: "gwm-fighter", name: `Fighter ${level}`, level,
     ac: 19, hp: between(level, 13, 9 * 20 + 15),
@@ -61,14 +65,14 @@ function gwmFighter(level: number): Combatant {
     actions: [
       {
         id: "attack", name: "Multiattack (GWM)", cost: { action: 1 }, recharge: "none",
-        automation: [{ type: "target", who: { who: "aiChoice" }, effects: Array.from({ length: attacks }, () => (
-          { type: "attack" as const, bonus: toHit, onHit: [{ type: "damage" as const, amount: dmgPerHit, damageType: "slashing" as const }] }
-        )) }],
+        automation: [{ type: "target", who: { who: "aiChoice" }, effects: Array.from({ length: attacks }, swing) }],
       },
       {
+        // Action Surge grants ONE extra action = one more Attack action: `baseAttacks`
+        // swings (1 at L3, 2 at L5, 3 at L11) — NOT the GWM bonus-action attack
         id: "action-surge", name: "Action Surge", cost: { bonus: 1 }, recharge: "none",
         limitedUse: { resource: "action_surge", amount: 1 },
-        automation: [{ type: "useAction", action: "attack", times: 2 }],
+        automation: [{ type: "target", who: { who: "aiChoice" }, effects: Array.from({ length: baseAttacks }, swing) }],
       },
     ],
     reactions: [{
