@@ -46,7 +46,7 @@ import {
   type RosterInit,
 } from "./battle";
 import { gridFromDef, makeGrid, tilesToString } from "./battle/grid";
-import { coneCells, lineTemplateCells, sphereCells } from "./battle/geometry";
+import { boxOf, coneCells, feetBetweenBoxes, hasLineOfSight, lineTemplateCells, sphereCells } from "./battle/geometry";
 import type { BattleGrid, BattleMapDef } from "./battle/grid";
 import type { BattleFrame, UnitSnap } from "./battle/state";
 import type { AwaitingInput, AwaitAction, AwaitUnit, BattleDecision } from "./battle/control";
@@ -315,6 +315,31 @@ export function aoePreview(
         ? lineTemplateCells(g, from.x, from.y, origin.x, origin.y, sizeFt)
         : sphereCells(g, origin.x, origin.y, sizeFt);
   return [...set];
+}
+
+/** cell keys ("x,y") at least one viewer can see right now — line of sight (walls
+ *  block) and within `sightFt`. Drives the Battle-mode fog-of-war overlay. */
+export function visibleCells(
+  dims: { width: number; height: number; tiles: string },
+  viewers: Array<{ x: number; y: number; fp: number }>,
+  sightFt = 60,
+): string[] {
+  if (!viewers.length) return [];
+  const g = gridFromDef({ width: dims.width, height: dims.height, tiles: dims.tiles, placements: {} });
+  const eyes = viewers.map((v) => boxOf(v.x, v.y, Math.max(1, v.fp)));
+  const out: string[] = [];
+  for (let y = 0; y < dims.height; y++) {
+    for (let x = 0; x < dims.width; x++) {
+      const cell = boxOf(x, y, 1);
+      for (const e of eyes) {
+        if (feetBetweenBoxes(e, cell) <= sightFt && hasLineOfSight(g, e, cell)) {
+          out.push(`${x},${y}`);
+          break;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** the id + glyph the fight will use for each combatant, without running it —

@@ -35,7 +35,7 @@ import {
   type SweepOut,
 } from "@/lib/sim/ui";
 import { runSimAsync, runSweepAsync, runBattleAsync, runDayAsync } from "@/lib/sim/runner";
-import { aoePreview, autoPlace, rosterForSetup, starterBattleMap } from "@/lib/sim/ui";
+import { aoePreview, autoPlace, rosterForSetup, starterBattleMap, visibleCells } from "@/lib/sim/ui";
 import type { AwaitAction, AwaitingInput, AwaitingReaction, BattleDecision, BattleMapDef, BattleRun, DayRun, ReactionChoice, RestKind, RosterEntry, UnitSnap } from "@/lib/sim/ui";
 
 const SETUP_KEY = "fightSimSetup";
@@ -437,6 +437,7 @@ function BattleMap({ setup }: { setup: SimSetup }) {
       run={run}
       awaiting={aw}
       reaction={rx}
+      hasControl={(setup.battleControl ?? []).length > 0}
       loading={loading}
       wiz={wiz}
       setWiz={setWiz}
@@ -463,6 +464,7 @@ function Replay({
   run,
   awaiting,
   reaction,
+  hasControl,
   loading,
   wiz,
   setWiz,
@@ -478,6 +480,7 @@ function Replay({
   run: BattleRun;
   awaiting?: AwaitingInput;
   reaction?: AwaitingReaction;
+  hasControl: boolean;
   loading: boolean;
   wiz: Wizard;
   setWiz: (w: Wizard) => void;
@@ -523,8 +526,55 @@ function Replay({
   const templateSet = useMemo(() => new Set(frame.templateCells ?? []), [frame]);
   const pathSet = useMemo(() => new Set((frame.path ?? []).slice(0, -1).map(([x, y]) => `${x},${y}`)), [frame]);
 
+  // ---- fog of war: what the party can see, per frame ----
+  const [fog, setFog] = useState(hasControl);
+  const visByFrame = useMemo(() => {
+    if (!fog) return null;
+    const m = new Map<number, Set<string>>();
+    for (const f of frames) {
+      const eyes = f.units
+        .filter((u) => u.side === "party" && u.alive && !u.downed)
+        .map((u) => ({ x: u.x, y: u.y, fp: u.fp }));
+      m.set(f.seq, new Set(eyes.length ? visibleCells(dims, eyes, 60) : []));
+    }
+    return m;
+  }, [fog, frames, dims]);
+  const visibleSet = fog ? visByFrame!.get(frame.seq) ?? new Set<string>() : null;
+  const exploredSet = useMemo(() => {
+    if (!fog || !visByFrame) return null;
+    const s = new Set<string>();
+    for (let i = 0; i <= shownIdx; i++) visByFrame.get(frames[i].seq)?.forEach((k) => s.add(k));
+    return s;
+  }, [fog, visByFrame, frames, shownIdx]);
+  // enemy ids the party has laid eyes on at some point up to this frame
+  const seenEnemyIds = useMemo(() => {
+    const s = new Set<string>();
+    if (!fog || !visByFrame) return s;
+    for (let i = 0; i <= shownIdx; i++) {
+      const vis = visByFrame.get(frames[i].seq);
+      if (!vis) continue;
+      for (const u of frames[i].units) {
+        if (u.side !== "monster") continue;
+        for (let dy = 0; dy < u.fp && !s.has(u.id); dy++)
+          for (let dx = 0; dx < u.fp; dx++) if (vis.has(`${u.x + dx},${u.y + dy}`)) s.add(u.id);
+      }
+    }
+    return s;
+  }, [fog, visByFrame, frames, shownIdx]);
+  const enemyVisibleNow = (u: UnitSnap): boolean => {
+    if (!fog || !visibleSet) return true;
+    for (let dy = 0; dy < u.fp; dy++)
+      for (let dx = 0; dx < u.fp; dx++) if (visibleSet.has(`${u.x + dx},${u.y + dy}`)) return true;
+    return false;
+  };
+
+  const frameBySeq = useMemo(() => new Map(frames.map((f) => [f.seq, f])), [frames]);
   const logLines = useMemo(
-    () => frames.slice(0, shownIdx + 1).filter((f) => f.text).map((f) => ({ seq: f.seq, round: f.round, text: f.text! })),
+    () =>
+      frames
+        .slice(0, shownIdx + 1)
+        .filter((f) => f.text)
+        .map((f) => ({ seq: f.seq, round: f.round, text: f.text!, actorId: f.actorId })),
     [frames, shownIdx],
   );
   useEffect(() => {
@@ -536,7 +586,10 @@ function Replay({
   const byId = useMemo(() => new Map(frame.units.map((u) => [u.id, u])), [frame]);
   const initOrder = run.initiative.length ? run.initiative : frame.units.map((u) => ({ id: u.id, name: u.name, glyph: u.glyph, side: u.side }));
   const rosterParty = initOrder.filter((i) => i.side === "party").map((i) => byId.get(i.id)).filter((u): u is UnitSnap => !!u);
-  const rosterMon = initOrder.filter((i) => i.side === "monster").map((i) => byId.get(i.id)).filter((u): u is UnitSnap => !!u);
+  const rosterMon = initOrder
+    .filter((i) => i.side === "monster")
+    .map((i) => byId.get(i.id))
+    .filter((u): u is UnitSnap => !!u && (!fog || seenEnemyIds.has(u.id)));
 
   // per-round total HP for the two sides (the play-by-play sparkline)
   const hpCurve = useMemo(() => {
@@ -803,6 +856,10 @@ function Replay({
             />
             <span className="text-xs text-muted tabular-nums whitespace-nowrap">R{frame.round} · {shownIdx + 1}/{frames.length}</span>
             <button className="text-xs text-accent hover:underline" onClick={onReplay}>replay</button>
+            <label className="text-xs text-muted flex items-center gap-1 cursor-pointer whitespace-nowrap" title="only show what the party can see">
+              <input type="checkbox" checked={fog} onChange={(e) => setFog(e.target.checked)} />
+              🌫 fog
+            </label>
             <span className="text-xs text-muted/60 hidden sm:inline">space · ← → · home/end</span>
           </div>
         </>
@@ -848,15 +905,25 @@ function Replay({
                   <span className="text-center">│</span>
                   {Array.from({ length: dims.width }, (_, x) => {
                     const key = `${x},${y}`;
-                    const u = unitAt.get(key);
+                    const uRaw = unitAt.get(key);
+                    const cellVis = !fog || visibleSet!.has(key);
+                    const cellExplored = !fog || exploredSet!.has(key);
+                    // your own people are always on your map; enemies only where you can see
+                    const u = uRaw && (uRaw.side === "party" || cellVis) ? uRaw : undefined;
                     const t = terrain[y * dims.width + x] ?? ".";
                     let ch = t === "." ? "·" : t;
                     let cls = TERRAIN_CLASS[t] ?? "text-muted/25";
+                    if (!cellExplored) {
+                      ch = "·";
+                      cls = "text-muted/10";
+                    } else if (!cellVis) {
+                      cls = "text-muted/20"; // explored, out of sight — remembered terrain only
+                    }
                     if (u) {
                       ch = u.glyph;
                       cls = u.side === "party" ? "text-accent font-semibold" : "text-danger font-semibold";
                       if (u.downed) cls = "text-muted/50 line-through";
-                    } else if (pathSet.has(key)) {
+                    } else if (cellVis && pathSet.has(key)) {
                       ch = "•";
                       cls = "text-accent/40";
                     }
@@ -910,24 +977,43 @@ function Replay({
             ))}
             {rosterMon.length > 0 && <div className="text-muted/40 font-mono text-xs my-0.5">──────────────</div>}
             {rosterMon.map((u) => (
-              <RosterRow key={u.id} u={u} actor={u.isActor || u.id === awaiting?.unitId} />
+              <div key={u.id} className={fog && !enemyVisibleNow(u) ? "opacity-40" : ""}>
+                <RosterRow u={u} actor={u.isActor || u.id === awaiting?.unitId} />
+              </div>
             ))}
+            {fog && rosterMon.length === 0 && (
+              <div className="text-muted/50 font-mono text-xs">── no enemy in sight ──</div>
+            )}
           </div>
 
           {hpCurve.rows.length > 1 && (
             <div className="font-mono text-xs text-muted flex flex-col gap-0.5">
               <div><span className="text-accent">party </span>{sparkline(hpCurve.rows.map((r) => r[1].p), hpCurve.pMax)}</div>
-              <div><span className="text-danger">foes  </span>{sparkline(hpCurve.rows.map((r) => r[1].m), hpCurve.mMax)}</div>
+              {!fog && (
+                <div><span className="text-danger">foes  </span>{sparkline(hpCurve.rows.map((r) => r[1].m), hpCurve.mMax)}</div>
+              )}
               <div className="text-muted/50">rounds 1–{hpCurve.rows[hpCurve.rows.length - 1][0]}</div>
             </div>
           )}
 
           <div ref={logRef} className="text-xs text-muted bg-panel border border-border rounded p-2 max-h-44 overflow-y-auto flex flex-col gap-0.5 font-mono">
-            {logLines.map((l) => (
-              <div key={l.seq}>
-                <span className="opacity-50">R{l.round}</span> {l.text}
-              </div>
-            ))}
+            {logLines.map((l) => {
+              const lf = frameBySeq.get(l.seq);
+              const hidden =
+                fog &&
+                !!lf?.actorId &&
+                lf.units.some((x) => x.id === lf.actorId && x.side === "monster") &&
+                !lf.units.some(
+                  (x) =>
+                    x.id === lf.actorId &&
+                    visByFrame?.get(l.seq)?.has(`${x.x},${x.y}`),
+                );
+              return (
+                <div key={l.seq} className={hidden ? "opacity-40 italic" : ""}>
+                  <span className="opacity-50">R{l.round}</span> {hidden ? "something moves in the fog" : l.text}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

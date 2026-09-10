@@ -172,3 +172,28 @@ describe("movement — pathToward", () => {
     expect(ex).toBeGreaterThanOrEqual(6); // made progress
   });
 });
+
+describe("fog of war — visibleCells", () => {
+  it("a wall blocks sight past it", async () => {
+    const { visibleCells } = await import("../src/lib/sim/ui");
+    // 9x3 room, full-height wall at column 4
+    const w = 9, h = 3;
+    let tiles = "";
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles += x === 4 ? "#" : ".";
+    const seen = new Set(visibleCells({ width: w, height: h, tiles }, [{ x: 1, y: 1, fp: 1 }], 999));
+    expect(seen.has("1,1")).toBe(true);   // where the viewer stands
+    expect(seen.has("3,1")).toBe(true);   // near side of the wall
+    expect(seen.has("6,1")).toBe(false);  // behind the wall — hidden
+    expect(seen.has("8,1")).toBe(false);
+  });
+  it("an open room is fully visible within range", async () => {
+    const { visibleCells } = await import("../src/lib/sim/ui");
+    const w = 10, h = 4;
+    const tiles = ".".repeat(w * h);
+    const near = new Set(visibleCells({ width: w, height: h, tiles }, [{ x: 0, y: 0, fp: 1 }], 30)); // 30 ft = 6 squares
+    expect(near.has("5,0")).toBe(true);
+    expect(near.has("9,3")).toBe(false); // ~13 squares away, out of range
+    const all = new Set(visibleCells({ width: w, height: h, tiles }, [{ x: 0, y: 0, fp: 1 }], 999));
+    expect(all.has("9,3")).toBe(true);
+  });
+});
