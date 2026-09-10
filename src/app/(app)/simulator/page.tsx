@@ -1449,7 +1449,7 @@ function MapEditor({
         <div className="overflow-x-auto">
           <div
             className="inline-grid font-mono leading-none select-none bg-panel border border-border rounded p-2 touch-none"
-            style={{ gridTemplateColumns: `repeat(${def.width}, 1ch)`, fontSize: "13px" }}
+            style={{ gridTemplateColumns: `repeat(${def.width}, 1.15em)`, fontSize: "13px" }}
           >
             {Array.from({ length: def.width * def.height }, (_, i) => {
               const x = i % def.width;
