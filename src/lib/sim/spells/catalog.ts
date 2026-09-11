@@ -69,6 +69,8 @@ export const SPELLS: Spell[] = [
   S_("thorn-whip", "Thorn Whip", 0, "transmutation", [D, A], { role: "damage", build: cantripAtk(6, "piercing") }),
   S_("true-strike", "True Strike", 0, "divination", [B, S, W]),
   S_("vicious-mockery", "Vicious Mockery", 0, "enchantment", [B], { role: "damage", build: cantripSave("wis", 4, "psychic") }),
+  S_("blade-ward", "Blade Ward", 0, "abjuration", [B, S, K, W]),
+  S_("friends", "Friends", 0, "enchantment", [B, S, K, W], { conc: true }),
 
   // ─────────────────────────────── level 1 ────────────────────────────────
   S_("alarm", "Alarm", 1, "abjuration", [R, W, A], { rit: true }),
@@ -120,6 +122,27 @@ export const SPELLS: Spell[] = [
   S_("thunderwave", "Thunderwave", 1, "evocation", [B, D, S, W, A], { role: "damage", max: 9, build: saveDmg(1, "con", 2, 8, "thunder", 1, { who: "area", shape: "cube", size: 15 }) }),
   S_("unseen-servant", "Unseen Servant", 1, "conjuration", [B, W, K, A], { rit: true }),
   S_("witch-bolt", "Witch Bolt", 1, "evocation", [S, W, K], { conc: true, role: "damage", build: atk(1, 1, 12, "lightning", 1) }),
+  S_("armor-of-agathys", "Armor of Agathys", 1, "abjuration", [K], { role: "buff", max: 9, build: (c) => [{ type: "target", who: { who: "self" }, effects: [{ type: "tempHp", amount: `${5 + Math.max(0, c.slotLevel - 1) * 5}` }] }] }),
+  S_("arms-of-hadar", "Arms of Hadar", 1, "conjuration", [K], { role: "damage", max: 9, build: saveDmg(1, "str", 2, 6, "necrotic", 1, { who: "area", shape: "emanation", size: 10 }) }),
+  S_("chromatic-orb", "Chromatic Orb", 1, "evocation", [S, W], { role: "damage", max: 9, build: atk(1, 3, 8, "fire", 1) }),
+  S_("compelled-duel", "Compelled Duel", 1, "enchantment", [P], { ct: "bonus", conc: true }),
+  S_("dissonant-whispers", "Dissonant Whispers", 1, "enchantment", [B], { role: "damage", max: 9, build: saveDmg(1, "wis", 3, 6, "psychic", 1, { who: "aiChoice" }) }),
+  S_("ensnaring-strike", "Ensnaring Strike", 1, "conjuration", [R], { ct: "bonus", conc: true, role: "buff", build: effect("ensnaring-strike", {}, { who: "self" }) }),
+  S_("goodberry", "Goodberry", 1, "transmutation", [D, R]),
+  S_("hail-of-thorns", "Hail of Thorns", 1, "conjuration", [R], { ct: "bonus", conc: true, role: "buff", build: effect("hail-of-thorns", {}, { who: "self" }) }),
+  S_("ice-knife", "Ice Knife", 1, "conjuration", [D, S, W], { role: "damage", max: 9, build: (c) => { const cold = 2 + Math.max(0, c.slotLevel - 1); return [
+    { type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: c.toHit, onHit: [{ type: "damage", amount: "1d10", damageType: "piercing" }] }] },
+    { type: "target", who: { who: "area", shape: "sphere", size: 5 }, effects: [{ type: "save", ability: "dex", dc: c.dc, onFail: [{ type: "damage", amount: `${cold}d6`, damageType: "cold" }], onSuccess: [{ type: "damage", amount: `${cold}d6`, damageType: "cold", half: true }] }] },
+  ]; } }),
+  S_("illusory-script", "Illusory Script", 1, "illusion", [B, K, W], { rit: true }),
+  S_("searing-smite", "Searing Smite", 1, "evocation", [P], { ct: "bonus", conc: true, role: "buff", build: effect("searing-smite", {}, { who: "self" }) }),
+  S_("tashas-hideous-laughter", "Tasha's Hideous Laughter", 1, "enchantment", [B, W], { conc: true, role: "control", build: (c) => [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "save", ability: "wis", dc: c.dc, onFail: [
+    { type: "applyCondition", condition: "prone", durationRounds: 10, saveEnds: { ability: "wis", dc: c.dc, at: "endOfTurn" } },
+    { type: "applyCondition", condition: "incapacitated", durationRounds: 10, saveEnds: { ability: "wis", dc: c.dc, at: "endOfTurn" } },
+  ] }] }] }),
+  S_("tensers-floating-disk", "Tenser's Floating Disk", 1, "conjuration", [W], { rit: true }),
+  S_("thunderous-smite", "Thunderous Smite", 1, "evocation", [P], { ct: "bonus", conc: true, role: "buff", build: effect("thunderous-smite", {}, { who: "self" }) }),
+  S_("wrathful-smite", "Wrathful Smite", 1, "evocation", [P], { ct: "bonus", conc: true, role: "buff", build: effect("wrathful-smite", {}, { who: "self" }) }),
 
   // ─────────────────────────────── level 2 ────────────────────────────────
   S_("aid", "Aid", 2, "abjuration", [C, P, A], { role: "buff", max: 9, build: (c) => [{ type: "target", who: { who: "eachAlly" }, effects: [{ type: "tempHp", amount: `${5 + Math.max(0, c.slotLevel - 2) * 5}` }] }] }),  // approximates the max-HP bump
@@ -174,6 +197,18 @@ export const SPELLS: Spell[] = [
   S_("warding-bond", "Warding Bond", 2, "abjuration", [C, A], { role: "defense" }),
   S_("web", "Web", 2, "conjuration", [S, W, A], { conc: true, role: "control", build: saveCond("dex", "restrained", 10, { who: { who: "chosenEnemies", upTo: 3 }, saveEnds: true }) }),
   S_("zone-of-truth", "Zone of Truth", 2, "enchantment", [B, C, P]),
+  S_("beast-sense", "Beast Sense", 2, "divination", [D, R], { conc: true, rit: true }),
+  S_("cloud-of-daggers", "Cloud of Daggers", 2, "conjuration", [B, S, K, W], { conc: true, role: "damage", max: 9, build: (c) => { const d = 4 + Math.max(0, c.slotLevel - 2) * 2; return [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "applyEffect", name: "cloud-of-daggers", durationRounds: 10, tick: [{ type: "damage", amount: `${d}d4`, damageType: "slashing" }] }] }]; } }),
+  S_("cordon-of-arrows", "Cordon of Arrows", 2, "transmutation", [R]),
+  S_("crown-of-madness", "Crown of Madness", 2, "enchantment", [B, S, K, W], { conc: true, role: "control", build: saveCond("wis", "charmed", 10, { who: { who: "aiChoice" }, saveEnds: true }) }),
+  S_("dragons-breath", "Dragon's Breath", 2, "transmutation", [S, W], { ct: "bonus", conc: true, role: "damage", max: 9, build: saveDmg(2, "dex", 3, 6, "fire", 1, { who: "area", shape: "cone", size: 15 }) }),
+  S_("melfs-acid-arrow", "Melf's Acid Arrow", 2, "evocation", [W], { role: "damage", max: 9, build: (c) => { const now = 4 + Math.max(0, c.slotLevel - 2); const later = 2 + Math.max(0, c.slotLevel - 2); return [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: c.toHit, onHit: [
+    { type: "damage", amount: `${now}d4`, damageType: "acid" },
+    { type: "applyEffect", name: "acid-arrow-lingering", durationRounds: 1, tick: [{ type: "damage", amount: `${later}d4`, damageType: "acid" }] },
+  ], onMiss: [{ type: "damage", amount: `${now}d4`, damageType: "acid", half: true }] }] }]; } }),
+  S_("mind-spike", "Mind Spike", 2, "divination", [S, K, W], { conc: true, role: "damage", max: 9, build: saveDmg(2, "wis", 3, 8, "psychic", 1, { who: "aiChoice" }) }),
+  S_("nystuls-magic-aura", "Nystul's Magic Aura", 2, "illusion", [W]),
+  S_("phantasmal-force", "Phantasmal Force", 2, "illusion", [B, S, W], { conc: true, role: "control", build: (c) => [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "save", ability: "int", dc: c.dc, onFail: [{ type: "applyEffect", name: "phantasmal-force", durationRounds: 10, tick: [{ type: "damage", amount: "1d6", damageType: "psychic" }] }] }] }] }),
 
   // ─────────────────────────────── level 3 ────────────────────────────────
   S_("animate-dead", "Animate Dead", 3, "necromancy", [C, W], { role: "summon", max: 9, build: conjure("zombie", "2", 6) }),
@@ -219,6 +254,13 @@ export const SPELLS: Spell[] = [
   S_("water-breathing", "Water Breathing", 3, "transmutation", [D, R, S, W, A], { rit: true }),
   S_("water-walk", "Water Walk", 3, "transmutation", [C, D, R, S, A], { rit: true }),
   S_("wind-wall", "Wind Wall", 3, "evocation", [D, R], { conc: true }),
+  S_("blinding-smite", "Blinding Smite", 3, "evocation", [P], { ct: "bonus", conc: true, role: "buff", build: effect("blinding-smite", {}, { who: "self" }) }),
+  S_("conjure-barrage", "Conjure Barrage", 3, "conjuration", [R], { role: "damage", build: saveDmg(3, "dex", 3, 8, "piercing", 0, { who: "area", shape: "cone", size: 60 }) }),
+  S_("crusaders-mantle", "Crusader's Mantle", 3, "evocation", [P], { conc: true, role: "buff", build: effect("crusaders-mantle", {}, { who: "eachAlly" }) }),
+  S_("elemental-weapon", "Elemental Weapon", 3, "transmutation", [P, R], { conc: true, role: "buff", build: effect("elemental-weapon", {}, { who: "self" }) }),
+  S_("hunger-of-hadar", "Hunger of Hadar", 3, "conjuration", [K], { conc: true, role: "control", build: () => [{ type: "target", who: { who: "area", shape: "sphere", size: 10 }, effects: [{ type: "applyEffect", name: "hunger-of-hadar", durationRounds: 10, tick: [{ type: "damage", amount: "2d6", damageType: "cold" }] }] }] }),
+  S_("leomunds-tiny-hut", "Leomund's Tiny Hut", 3, "evocation", [B, W], { rit: true }),
+  S_("lightning-arrow", "Lightning Arrow", 3, "transmutation", [R], { ct: "bonus", conc: true, role: "damage", max: 9, build: atk(3, 4, 8, "lightning", 1) }),
 
   // ─────────────────────────────── level 4 ────────────────────────────────
   S_("arcane-eye", "Arcane Eye", 4, "divination", [W, A], { conc: true }),
@@ -249,6 +291,17 @@ export const SPELLS: Spell[] = [
   S_("stone-shape", "Stone Shape", 4, "transmutation", [C, D, W, A]),
   S_("stoneskin", "Stoneskin", 4, "abjuration", [D, R, S, W], { conc: true, role: "defense", build: effect("stoneskin", { damageTakenMultiplier: 0.5 }, { who: "self" }) }),
   S_("wall-of-fire", "Wall of Fire", 4, "evocation", [D, S, W], { conc: true, role: "damage", max: 9, build: (c) => [{ type: "target", who: { who: "eachEnemy" }, effects: [{ type: "save", ability: "dex", dc: c.dc, onFail: [{ type: "damage", amount: `${5 + Math.max(0, c.slotLevel - 4)}d8`, damageType: "fire" }], onSuccess: [] }] }] }),
+  S_("aura-of-life", "Aura of Life", 4, "abjuration", [P], { conc: true, role: "buff", build: effect("aura-of-life", {}, { who: "eachAlly" }) }),
+  S_("aura-of-purity", "Aura of Purity", 4, "abjuration", [P], { conc: true, role: "buff", build: effect("aura-of-purity", { saveAdvantage: "adv" }, { who: "eachAlly" }) }),
+  S_("charm-monster", "Charm Monster", 4, "enchantment", [B, D, S, K, W], { role: "control", build: saveCond("wis", "charmed", 10, { who: { who: "aiChoice" } }) }),
+  S_("evards-black-tentacles", "Evard's Black Tentacles", 4, "conjuration", [W], { conc: true, role: "control", build: saveCond("dex", "restrained", 10, { who: { who: "area", shape: "cube", size: 20 }, dmg: [3, 6, "bludgeoning"], saveEnds: true }) }),
+  S_("grasping-vine", "Grasping Vine", 4, "conjuration", [D, R], { ct: "bonus", conc: true, role: "control", build: (c) => [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "save", ability: "dex", dc: c.dc, onFail: [{ type: "move", kind: "pull", distance: 20 }] }] }] }),
+  S_("leomunds-secret-chest", "Leomund's Secret Chest", 4, "conjuration", [W, A]),
+  S_("mordenkainens-faithful-hound", "Mordenkainen's Faithful Hound", 4, "conjuration", [W, A], { ct: "bonus", role: "damage", build: (c) => [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: c.pb + c.spellMod, onHit: [{ type: "damage", amount: "4d8", damageType: "piercing" }] }] }] }),
+  S_("staggering-smite", "Staggering Smite", 4, "evocation", [P], { ct: "bonus", conc: true, role: "buff", build: effect("staggering-smite", {}, { who: "self" }) }),
+  S_("vitriolic-sphere", "Vitriolic Sphere", 4, "evocation", [S, W], { role: "damage", max: 9, build: (c) => { const now = 10 + Math.max(0, c.slotLevel - 4) * 2; return [{ type: "target", who: { who: "area", shape: "sphere", size: 20 }, effects: [{ type: "save", ability: "dex", dc: c.dc,
+    onFail: [{ type: "damage", amount: `${now}d4`, damageType: "acid" }, { type: "applyEffect", name: "vitriolic-sphere", durationRounds: 1, tick: [{ type: "damage", amount: "5d4", damageType: "acid" }] }],
+    onSuccess: [{ type: "damage", amount: `${now}d4`, damageType: "acid", half: true }] }] }]; } }),
 
   // ─────────────────────────────── level 5 ────────────────────────────────
   S_("animate-objects", "Animate Objects", 5, "transmutation", [B, S, W, A], { conc: true, role: "summon", build: conjure("chain-devil", "1", 2) }),
@@ -288,6 +341,13 @@ export const SPELLS: Spell[] = [
   S_("tree-stride", "Tree Stride", 5, "conjuration", [D, R], { conc: true }),
   S_("wall-of-force", "Wall of Force", 5, "evocation", [W], { conc: true, role: "control", build: saveCond("dex", "restrained", 10, { who: { who: "chosenEnemies", upTo: 2 }, saveEnds: false }) }),
   S_("wall-of-stone", "Wall of Stone", 5, "evocation", [D, S, W, A], { conc: true, role: "control", build: saveCond("dex", "restrained", 10, { who: { who: "chosenEnemies", upTo: 2 }, saveEnds: false }) }),
+  S_("bigbys-hand", "Bigby's Hand", 5, "evocation", [W], { conc: true, ct: "bonus", role: "damage", max: 9, build: atk(5, 4, 8, "force", 2) }),
+  S_("circle-of-power", "Circle of Power", 5, "abjuration", [P], { conc: true, role: "buff", build: effect("circle-of-power", { saveAdvantage: "adv" }, { who: "eachAlly" }) }),
+  S_("conjure-volley", "Conjure Volley", 5, "conjuration", [R], { role: "damage", build: saveDmg(5, "dex", 8, 8, "piercing", 0, { who: "area", shape: "sphere", size: 40 }) }),
+  S_("destructive-wave", "Destructive Wave", 5, "evocation", [P], { role: "damage", build: (c) => [{ type: "target", who: { who: "area", shape: "emanation", size: 30 }, effects: [{ type: "save", ability: "con", dc: c.dc,
+    onFail: [{ type: "damage", amount: "5d6", damageType: "thunder" }, { type: "damage", amount: "5d6", damageType: "radiant" }, { type: "applyCondition", condition: "prone", durationRounds: 1 }],
+    onSuccess: [{ type: "damage", amount: "5d6", damageType: "thunder", half: true }, { type: "damage", amount: "5d6", damageType: "radiant", half: true }] }] }] }),
+  S_("rarys-telepathic-bond", "Rary's Telepathic Bond", 5, "divination", [W], { rit: true }),
 
   // ─────────────────────────────── level 6 ────────────────────────────────
   S_("blade-barrier", "Blade Barrier", 6, "evocation", [C], { conc: true, role: "damage", build: (c) => [{ type: "target", who: { who: "eachEnemy" }, effects: [{ type: "save", ability: "dex", dc: c.dc, onFail: [{ type: "damage", amount: "6d10", damageType: "slashing" }], onSuccess: [{ type: "damage", amount: "6d10", damageType: "slashing", half: true }] }] }] }),
@@ -318,6 +378,10 @@ export const SPELLS: Spell[] = [
   S_("wall-of-thorns", "Wall of Thorns", 6, "conjuration", [D], { conc: true, role: "damage", build: saveDmg(6, "dex", 7, 8, "piercing", 1) }),
   S_("wind-walk", "Wind Walk", 6, "transmutation", [D]),
   S_("word-of-recall", "Word of Recall", 6, "conjuration", [C]),
+  S_("arcane-gate", "Arcane Gate", 6, "conjuration", [S, K, W], { conc: true }),
+  S_("drawmijs-instant-summons", "Drawmij's Instant Summons", 6, "conjuration", [W], { rit: true }),
+  S_("otilukes-freezing-sphere", "Otiluke's Freezing Sphere", 6, "evocation", [S, W], { role: "damage", max: 9, build: saveDmg(6, "con", 10, 6, "cold", 1, { who: "area", shape: "sphere", size: 60 }) }),
+  S_("ottos-irresistible-dance", "Otto's Irresistible Dance", 6, "enchantment", [B, W], { conc: true, role: "control", build: (c) => [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "applyEffect", name: "irresistible-dance", durationRounds: 10, mods: { attackAdvantage: "dis", attacksAgainstItAdvantage: "adv", speedZero: true }, saveEnds: { ability: "wis", dc: c.dc, at: "endOfTurn" } }] }] }),
 
   // ─────────────────────────────── level 7 ────────────────────────────────
   S_("conjure-celestial", "Conjure Celestial", 7, "conjuration", [C], { conc: true, role: "summon", build: conjure("fire-elemental", "1", 1) }),
