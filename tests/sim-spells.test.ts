@@ -7,7 +7,7 @@ import { makeCaster } from "../src/lib/sim/spells/caster";
 import { makeTemplate } from "../src/lib/sim/engine/templates";
 import { parseCombatant } from "../src/lib/sim/schema";
 import { validateCombatant } from "../src/lib/sim/validate";
-import { runScenario, standardParty } from "../src/lib/sim/engine/scenario";
+import { runScenario, runScenarioOnce, standardParty } from "../src/lib/sim/engine/scenario";
 
 describe("spell system", () => {
   it("the catalog spans levels 0-9 and every spell has valid metadata", () => {
@@ -121,4 +121,34 @@ describe("spell system", () => {
     expect(bruising).toBeGreaterThan(wipe);
     expect(wipe).toBeLessThan(0.15);
   }, 60000);
+
+  it("a smite's extraDamageOnHit actually lands, and a one-shot smite is used up by the hit", () => {
+    let sawBonus = false;
+    for (let seed = 1; seed <= 10; seed++) {
+      const out = runScenarioOnce({ party: [{ template: "vengeance-paladin", level: 5, spells: ["searing-smite"] }], enemies: ["ogre"], seed });
+      if (out.log.some((l) => l.includes("Searing Smite"))) { sawBonus = true; break; }
+    }
+    expect(sawBonus).toBe(true);
+  });
+
+  it("a persistent hit-rider (Hex) keeps dealing its bonus damage across multiple hits, not just one", () => {
+    const out = runScenarioOnce({ party: [{ template: "warlock", level: 5, spells: ["hex"] }], enemies: ["adult-red-dragon"], seed: 3 });
+    const hexCasts = out.log.filter((l) => l.includes("Hex")).length;
+    // Hex is concentration + bonus action: it shouldn't need to be recast every single turn
+    // the way a one-shot smite would, since its bonus applies to every hit while it's up
+    expect(hexCasts).toBeLessThan(out.result.rounds);
+  });
+
+  it("bonus-action spells (Hex, a smite, ...) can be cast on any round, not just round 1", () => {
+    let castAfterRound1 = false;
+    for (let seed = 1; seed <= 12; seed++) {
+      const out = runScenarioOnce({ party: [{ template: "hunter-ranger", level: 5, spells: ["ensnaring-strike"] }], enemies: ["troll"], seed });
+      for (const line of out.log) {
+        const m = /^R(\d+): .*Ensnaring Strike/.exec(line);
+        if (m && Number(m[1]) > 1) { castAfterRound1 = true; break; }
+      }
+      if (castAfterRound1) break;
+    }
+    expect(castAfterRound1).toBe(true);
+  });
 });

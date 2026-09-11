@@ -105,13 +105,14 @@ export function saveCond(
 }
 
 /** buff / debuff effect on a target set */
-export function effect(name: string, mods: EffectMods, o: { who?: "self" | "eachAlly"; durationRounds?: number; save?: [Ability]; tick?: [number, number, DamageType] } = {}): Spell["build"] {
+export function effect(name: string, mods: EffectMods, o: { who?: "self" | "eachAlly"; durationRounds?: number; save?: [Ability]; tick?: [number, number, DamageType]; oneShot?: boolean } = {}): Spell["build"] {
   return (c) => {
     const eff: Extract<AutomationNode, { type: "applyEffect" }> = {
       type: "applyEffect", name, mods, durationRounds: o.durationRounds ?? 10,
     };
     if (o.tick) eff.tick = [{ type: "damage", amount: N(o.tick[0], o.tick[1]), damageType: o.tick[2] }];
     if (o.save) eff.saveEnds = { ability: o.save[0], dc: c.dc, at: "endOfTurn" };
+    if (o.oneShot) eff.oneShot = true;
     return [{ type: "target", who: { who: o.who ?? "self" }, effects: [eff] }];
   };
 }

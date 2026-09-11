@@ -12,6 +12,8 @@ export interface ActiveEffect {
   /** round number at which it drops off; Infinity = until removed / save ends */
   expiresRound: number;
   sourceId: string;
+  /** removed the moment its extraDamageOnHit lands on an attack */
+  oneShot?: boolean;
 }
 
 export interface ConditionInstance {

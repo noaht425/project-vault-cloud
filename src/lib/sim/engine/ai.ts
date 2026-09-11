@@ -290,6 +290,28 @@ export function takePcTurn(state: CombatState, u: CombatantState, level: number)
     }
   }
 
+  // any-round bonus-action spell (Hex, a smite, Ensnaring Strike, ...) — the round-1
+  // opener above is a curated list; this scores whatever's left every turn so a
+  // one-shot smite gets re-tagged before each swing, not just round 1. Skipped while
+  // already concentrating on something, so it never opportunistically clobbers a
+  // more valuable ongoing spell (Spirit Guardians, Moonbeam, ...) for a lesser one.
+  if (!u.bonusUsedThisTurn) {
+    const bonusSpells = u.ref.actions.filter(
+      (a) => (a.cost.bonus ?? 0) > 0 && a.isSpell && !(a.concentration && u.concentratingOn) && actionAvailable(state, u, a),
+    );
+    let bestBonus: Action | undefined;
+    let bestBonusScore = 0; // require real positive value — never force a wasted cast
+    for (const a of bonusSpells) {
+      const s = scoreAction(state, u, a).score;
+      if (s > bestBonusScore) { bestBonusScore = s; bestBonus = a; }
+    }
+    if (bestBonus) {
+      spend(u, bestBonus);
+      markEconomy(u, bestBonus);
+      runAction(state, u, bestBonus);
+    }
+  }
+
   if (u.actionUsedThisTurn) return; // action already spent (revive / action opener)
   const best = chooseBest(state, u) ?? u.ref.actions.find((a) => a.id === "attack" && actionAvailable(state, u, a));
   if (best) {

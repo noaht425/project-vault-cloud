@@ -2,7 +2,7 @@
 
 import type { Action, AutomationNode, Condition, DamageType } from "../schema";
 
-import { applyDamage, rollAttack, rollSave } from "./resolve";
+import { applyDamage, rollAttack, rollSave, type AttackResult } from "./resolve";
 import { MINIONS } from "./minions";
 import { isSpell, mayCounterspell, provokeOpportunityAttacks, reactToAttackResolved } from "./reactions";
 import {
@@ -95,6 +95,29 @@ function rollDamage(state: CombatState, amount: string, mult = 1, crit = false):
     }
   }
   return Math.round(total);
+}
+
+/** smites, Ensnaring Strike, Hex, Hunter's Mark, Crusader's Mantle, Elemental Weapon, ... —
+ *  anything that tags `attacker` with an `extraDamageOnHit` rider fires it here, on every
+ *  attack roll `attacker` lands (spell attacks included — the schema doesn't distinguish
+ *  weapon vs. spell attacks). A `oneShot` effect (a one-hit smite) is consumed immediately;
+ *  if that was the caster's concentration spell, ending it here is correct — the spell's own
+ *  duration is "until the triggering hit lands or 1 minute", not the full minute regardless. */
+function applyExtraDamageOnHit(state: CombatState, attacker: CombatantState, target: CombatantState, res: AttackResult): void {
+  for (const e of [...attacker.effects]) {
+    const extra = e.mods?.extraDamageOnHit;
+    if (!extra) continue;
+    const amt = rollDamage(state, extra.amount, 1, res.crit);
+    applyDamage(state, target, amt, extra.damageType, {
+      hadAdvantage: res.hadAdvantage, attackerMagical: true, sourceId: attacker.id, viaAttack: true,
+    });
+    if (!e.oneShot) continue;
+    if (attacker.concentratingOn && attacker.concentrationEffects?.includes(e.name)) {
+      breakConcentration(state, attacker, "recast"); // the spell resolved, not "broken" — no log line
+    } else {
+      attacker.effects = attacker.effects.filter((x) => x !== e);
+    }
+  }
 }
 
 /** very small expression evaluator for branch.if — best-effort, defaults to true on anything unknown */
@@ -235,8 +258,10 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
           if (res.hit) ctx.attackTally.hit++;
         }
         const next: RunCtx = { ...ctx, last: { ...ctx.last, attackHit: res.hit, attackCrit: res.crit, attackAdv: res.hadAdvantage }, crit: res.crit, inAttack: true, depth: ctx.depth + 1 };
-        if (res.hit) runAutomation(node.onHit, next);
-        else if (node.onMiss) runAutomation(node.onMiss, next);
+        if (res.hit) {
+          runAutomation(node.onHit, next);
+          applyExtraDamageOnHit(state, source, t, res);
+        } else if (node.onMiss) runAutomation(node.onMiss, next);
         reactToAttackResolved(state, { attacker: source, target: t, hit: res.hit, melee: source.zone === "melee" });
         break;
       }
@@ -325,6 +350,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
           saveEnds: node.saveEnds ? { ability: node.saveEnds.ability, dc: typeof node.saveEnds.dc === "number" ? node.saveEnds.dc : 18, at: node.saveEnds.at } : undefined,
           expiresRound: node.durationRounds && node.durationRounds > 0 ? state.round + node.durationRounds : Infinity,
           sourceId: source.id,
+          oneShot: node.oneShot,
         });
         ctx.appliedNames?.push(node.name);
         break;

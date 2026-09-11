@@ -125,7 +125,7 @@ export type AutomationNode =
   | { type: "heal"; amount: string }
   | { type: "tempHp"; amount: string }
   | { type: "applyCondition"; condition: Condition; durationRounds?: number; saveEnds?: z.infer<typeof saveEndsSchema> }
-  | { type: "applyEffect"; name: string; durationRounds?: number; mods?: EffectMods; tick?: AutomationNode[]; saveEnds?: z.infer<typeof saveEndsSchema> }
+  | { type: "applyEffect"; name: string; durationRounds?: number; mods?: EffectMods; tick?: AutomationNode[]; saveEnds?: z.infer<typeof saveEndsSchema>; oneShot?: boolean }
   | { type: "removeEffect"; name: string }
   | { type: "move"; kind: "pull" | "push" | "teleportSelf" | "teleportSelfToMarked" | "withdraw"; distance?: number; provokes?: boolean }
   | { type: "mark"; note?: string }
@@ -178,6 +178,8 @@ export const automationNodeSchema: z.ZodType<AutomationNode> = z.lazy(() =>
       mods: effectModsSchema.optional(),
       tick: z.array(automationNodeSchema).optional(),
       saveEnds: saveEndsSchema.optional(),
+      // consumed the moment its extraDamageOnHit lands on an attack (smites, Ensnaring Strike, ...)
+      oneShot: z.boolean().optional(),
     }),
     z.object({ type: z.literal("removeEffect"), name: z.string() }),
     z.object({

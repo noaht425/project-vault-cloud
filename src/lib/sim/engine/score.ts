@@ -137,6 +137,13 @@ export function scoreAction(state: CombatState, actor: CombatantState, action: A
         if (t.side !== actor.side && (n.mods?.speedZero || n.mods?.noReactions || n.mods?.saveAdvantage === "dis")) control += pMul * 10;
         const tick = n.tick?.find((x) => x.type === "damage");
         if (tick && tick.type === "damage") damage += pMul * (avgDice(tick.amount) ?? 0) * 1.5; // a few ticks
+        if (n.mods?.extraDamageOnHit) {
+          // a smite/hex/mark-style rider: credit its expected future payoff so the AI
+          // will actually spend the slot/bonus action on it — one likely hit for a
+          // one-shot smite, several hits over the buff's life for a lasting mark/aura
+          const perHit = avgDice(n.mods.extraDamageOnHit.amount) ?? 0;
+          damage += pMul * perHit * (n.oneShot ? 0.7 : 2.5);
+        }
       } else if (n.type === "heal") {
         const amt = avgDice(n.amount) ?? 0;
         const missing = Math.max(0, t.maxHp - t.hp);
