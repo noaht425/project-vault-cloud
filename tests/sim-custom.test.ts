@@ -118,6 +118,36 @@ describe("custom monster loading", () => {
     expect(mc.partyWinRate).toBeGreaterThanOrEqual(0);
     expect(mc.partyWinRate).toBeLessThanOrEqual(1);
   });
+
+  it("a whenReducedToZero trait (a 'pops when killed' burst) actually fires on death", () => {
+    const balloon = parseCombatant({
+      id: "custom-balloon",
+      name: "Balloon",
+      kind: "monster",
+      cr: "1",
+      ac: 10,
+      maxHp: 1, // dies to any hit — the burst should fire immediately
+      abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+      pb: 2,
+      traits: [{
+        id: "pop",
+        name: "Pop",
+        trigger: "whenReducedToZero",
+        automation: [{ type: "target", who: { who: "eachEnemy" }, effects: [
+          { type: "save", ability: "dex", dc: 20, onFail: [{ type: "damage", amount: "10d6", damageType: "acid" }] },
+        ] }],
+      }],
+      actions: [{
+        id: "poke", name: "Poke", cost: { action: 1 }, recharge: "none",
+        automation: [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "attack", bonus: 0, onHit: [{ type: "damage", amount: "1", damageType: "bludgeoning" }] }] }],
+      }],
+    });
+    const { log } = runScenarioOnce({ party: standardParty(3), enemies: ["custom-balloon"], seed: 1, extraById: { "custom-balloon": balloon } });
+    expect(log.some((l) => /Balloon is destroyed/.test(l))).toBe(true);
+    // the trait fires as its own "(reaction) uses Pop" line, with a DC 20 save that
+    // should fail for someone at this level — the burst's damage actually lands
+    expect(log.some((l) => /\(reaction\) uses Pop ->.*FAIL/.test(l))).toBe(true);
+  });
 });
 
 describe('"make a monster" builder', () => {

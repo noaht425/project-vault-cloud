@@ -61,6 +61,9 @@ export interface RunActionOpts {
   asLegendary?: boolean;
   asReaction?: boolean;
   geo?: Pick<RunCtx, "geoTargets" | "attackMods">;
+  /** a death-burst trait fires on the creature's own dying breath — `isIncapacitated`
+   *  (which treats "!alive" as incapacitated) would otherwise always block it. */
+  skipIncapacitatedCheck?: boolean;
 }
 
 const LOCK_CONDITIONS: Condition[] = ["stunned", "paralyzed", "incapacitated", "unconscious", "petrified"];
@@ -117,6 +120,21 @@ function applyExtraDamageOnHit(state: CombatState, attacker: CombatantState, tar
     } else {
       attacker.effects = attacker.effects.filter((x) => x !== e);
     }
+  }
+}
+
+/** a "pops like a balloon" / death-burst trait — fired once, the instant `dying`
+ *  transitions from up to downed/dead, with `dying` itself as the automation's
+ *  source (so "area"/"eachEnemy" resolve relative to where it died, hitting its
+ *  actual foes, not whoever dealt the killing blow). Run through `runAction` (not
+ *  a bare `runAutomation`) so it gets its own "Name — Trait -> ..." log line,
+ *  same as any other triggered reaction, instead of silently mutating HP. */
+function fireOnDeathTraits(state: CombatState, dying: CombatantState): void {
+  for (const trait of dying.ref.traits) {
+    if (trait.trigger !== "whenReducedToZero" || !trait.automation.length) continue;
+    runAction(state, dying, {
+      id: trait.id, name: trait.name, cost: {}, recharge: "none", automation: trait.automation,
+    }, { asReaction: true, skipIncapacitatedCheck: true });
   }
 }
 
@@ -300,6 +318,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
           amt = rollDamage(state, node.amount, node.diceMultiplier ?? 1, ctx.crit ?? false);
         }
         if (ctx.halfMode || node.half) amt = Math.floor(amt / 2);
+        const wasUp = t.alive && !t.downed;
         const dealt = applyDamage(state, t, amt, node.damageType as DamageType, {
           ignoreResistances: node.ignoreResistances,
           hadAdvantage: ctx.last.attackAdv,
@@ -309,6 +328,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
           viaSpell: ctx.spell,
         });
         source.damageDealt += dealt;
+        if (wasUp && (!t.alive || t.downed)) fireOnDeathTraits(state, t);
         break;
       }
 
@@ -452,7 +472,7 @@ export function runAction(
   action: Action,
   opts: RunActionOpts = {},
 ): void {
-  if (isIncapacitated(source)) return;
+  if (isIncapacitated(source) && !opts.skipIncapacitatedCheck) return;
   const geo = opts.geo ?? {};
 
   // track "is it singing?" for summon gates (a song-driven raise-minions ability)
