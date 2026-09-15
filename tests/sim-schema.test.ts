@@ -351,4 +351,19 @@ describe("sim schema — Phase 0", () => {
     expect((s2.party[1] as { level: number }).level).toBe(16);
     expect((s2.party[3] as { level: number }).level).toBe(15);
   });
+
+  it("flavor is optional, presentation-only, and round-trips untouched", () => {
+    const withoutFlavor = parseCombatant({ ...FIXTURES_BY_ID["ogre"], id: "ogre-plain" });
+    expect(withoutFlavor.flavor).toBeUndefined();
+
+    const withFlavor = parseCombatant({
+      ...FIXTURES_BY_ID["ogre"],
+      id: "ogre-flavored",
+      flavor: { type: "giant", alignment: "chaotic evil", senses: "darkvision 60 ft., passive Perception 8", languages: "Common, Giant" },
+    });
+    expect(withFlavor.flavor).toEqual({
+      type: "giant", alignment: "chaotic evil",
+      senses: "darkvision 60 ft., passive Perception 8", languages: "Common, Giant",
+    });
+  });
 });

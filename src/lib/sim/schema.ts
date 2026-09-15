@@ -329,6 +329,20 @@ export const aiSchema = z.object({
 });
 export type AI = z.infer<typeof aiSchema>;
 
+// ------------------------------- flavor (presentation only) ------------
+// Pure stat-block dressing: the engine never reads this. It exists so a
+// monster's type/alignment/senses/languages are recorded once, on the data,
+// instead of being reconstructed (or guessed) by hand every time someone
+// writes the block up.
+
+export const flavorSchema = z.object({
+  type: z.string().optional(),       // "dragon", "fey", "fiend (devil)", ...
+  alignment: z.string().optional(),  // "chaotic evil", "unaligned", ...
+  senses: z.string().optional(),     // "darkvision 120 ft., passive Perception 11"
+  languages: z.string().optional(),  // "Common, Draconic", "—", ...
+});
+export type Flavor = z.infer<typeof flavorSchema>;
+
 // ------------------------------- the combatant ------------------------
 
 export const combatantSchema = z.object({
@@ -375,6 +389,7 @@ export const combatantSchema = z.object({
   legendaryActions: legendaryActionsSchema.optional(),
   lairActions: lairActionsSchema.optional(),
   regionalNote: z.string().optional(),
+  flavor: flavorSchema.optional(),
 
   // prefault (not default) so the inner field defaults inside aiSchema are applied
   ai: aiSchema.prefault({}),
