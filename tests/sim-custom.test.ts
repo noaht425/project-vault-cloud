@@ -148,6 +148,20 @@ describe("custom monster loading", () => {
     // should fail for someone at this level — the burst's damage actually lands
     expect(log.some((l) => /\(reaction\) uses Pop ->.*FAIL/.test(l))).toBe(true);
   });
+
+  it("a whenHitByAttack trait (a 'hurts you back' rider) hits the attacker, not the trait-bearer's own AI target", () => {
+    const pricklyBrute = brute("prickly-brute");
+    (pricklyBrute as any).traits = [{
+      id: "spikes", name: "Spikes", trigger: "whenHitByAttack",
+      automation: [{ type: "target", who: { who: "aiChoice" }, effects: [{ type: "damage", amount: "1d10", damageType: "piercing" }] }],
+    }];
+    const spiky = parseCombatant(pricklyBrute);
+    const { log } = runScenarioOnce({ party: standardParty(10), enemies: ["custom-brute"], seed: 1, extraById: { "custom-brute": spiky } });
+    // the retaliation is its own "(reaction) uses Spikes" line, and lands on whichever
+    // PC actually landed the hit — never on Brute custom-add itself (there's only one enemy)
+    expect(log.some((l) => /\(reaction\) uses Spikes ->/.test(l))).toBe(true);
+    expect(log.some((l) => /Spikes -> Brute/.test(l))).toBe(false);
+  });
 });
 
 describe('"make a monster" builder', () => {

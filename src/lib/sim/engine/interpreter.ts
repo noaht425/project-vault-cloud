@@ -64,6 +64,10 @@ export interface RunActionOpts {
   /** a death-burst trait fires on the creature's own dying breath — `isIncapacitated`
    *  (which treats "!alive" as incapacitated) would otherwise always block it. */
   skipIncapacitatedCheck?: boolean;
+  /** pins every `target` node in this action to exactly these units, bypassing
+   *  `who` resolution — used for a retaliation trait that must hit whoever just
+   *  attacked it, not "aiChoice"/"eachEnemy" from the trait-bearer's own AI. */
+  forceScope?: CombatantState[];
 }
 
 const LOCK_CONDITIONS: Condition[] = ["stunned", "paralyzed", "incapacitated", "unconscious", "petrified"];
@@ -135,6 +139,20 @@ function fireOnDeathTraits(state: CombatState, dying: CombatantState): void {
     runAction(state, dying, {
       id: trait.id, name: trait.name, cost: {}, recharge: "none", automation: trait.automation,
     }, { asReaction: true, skipIncapacitatedCheck: true });
+  }
+}
+
+/** a "hurts you back" trait (Corrosive Form, Corrosive Hide, ...) — fires whenever
+ *  `hitTarget` is struck by a landed attack, with `hitTarget` as the source (so
+ *  the retaliation is its own effect) but pinned via forceScope onto `attacker`
+ *  specifically — a plain "aiChoice"/"eachEnemy" `who` would pick whatever
+ *  `hitTarget`'s own AI prefers, not necessarily the creature that just hit it. */
+function fireOnHitTraits(state: CombatState, hitTarget: CombatantState, attacker: CombatantState): void {
+  for (const trait of hitTarget.ref.traits) {
+    if (trait.trigger !== "whenHitByAttack" || !trait.automation.length) continue;
+    runAction(state, hitTarget, {
+      id: trait.id, name: trait.name, cost: {}, recharge: "none", automation: trait.automation,
+    }, { asReaction: true, skipIncapacitatedCheck: true, forceScope: [attacker] });
   }
 }
 
@@ -279,6 +297,7 @@ export function runAutomation(nodes: AutomationNode[], ctx: RunCtx): void {
         if (res.hit) {
           runAutomation(node.onHit, next);
           applyExtraDamageOnHit(state, source, t, res);
+          fireOnHitTraits(state, t, source);
         } else if (node.onMiss) runAutomation(node.onMiss, next);
         reactToAttackResolved(state, { attacker: source, target: t, hit: res.hit, melee: source.zone === "melee" });
         break;
@@ -487,7 +506,7 @@ export function runAction(
   const appliedNames: string[] | undefined = action.concentration ? [] : undefined;
 
   if (!state.verbose) {
-    runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, spell, appliedNames, ...geo });
+    runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, spell, appliedNames, forceScope: opts.forceScope, ...geo });
     if (action.concentration && appliedNames && appliedNames.length) {
       source.concentratingOn = action.id;
       source.concentrationEffects = [...new Set(appliedNames)];
@@ -500,7 +519,7 @@ export function runAction(
   const fxBefore = new Map([...state.units.values()].map((u) => [u.id, new Set(u.effects.map((e) => e.name))]));
   const saveLog = new Map<string, boolean>();
   const attackTally = { rolled: 0, hit: 0, unreachable: false };
-  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, attackTally, spell, appliedNames, ...geo });
+  runAutomation(action.automation, { state, source, scope: [], last: {}, depth: 0, saveLog, attackTally, spell, appliedNames, forceScope: opts.forceScope, ...geo });
   if (action.concentration && appliedNames && appliedNames.length) {
     source.concentratingOn = action.id;
     source.concentrationEffects = [...new Set(appliedNames)];
